@@ -301,7 +301,7 @@ async function handleFile(input){
 }
 
 async function callAI(prompt){
-  const res=await fetch('https://api.anthropic.com/v1/messages',{
+  const res=await fetch('https://sales-tracker-api.kevinb.workers.dev',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,messages:[{role:'user',content:prompt}]})
   });
