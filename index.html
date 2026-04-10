@@ -325,17 +325,21 @@ async function callAI(prompt){
 }
 
 async function handleOrderPDF(text,filename,status){
+  // Extract Sales Order # directly from text using regex before sending to AI
+  const soMatch = text.match(/SALES\s+ORDER\s+NO[^\d]*(\d{5,7})/i);
+  const extractedSO = soMatch ? soMatch[1] : '';
+
   const raw=await callAI(`Parse this Marmon Utility order acknowledgement for D'Ewart Representatives. Return ONLY raw JSON, no markdown:
 {
-  "salesOrderNo": "the numeric-only SALES ORDER NO printed in large bold text in the document header directly under or next to the words SALES ORDER NO — it is typically a 6-digit number like 130513. Do NOT use the customer number (which contains letters like 000056-m05), do NOT use the PO number, do NOT use any number containing letters or dashes",
-  "customerPONo": "CUSTOMER P.O. NUMBER",
-  "orderDate": "YYYY-MM-DD",
-  "scheduledShip": "YYYY-MM-DD from SCHEDULED SHIP label",
-  "requestedDate": "YYYY-MM-DD from REQUESTED label",
-  "customer": "customer company name",
+  "salesOrderNo": "${extractedSO || 'find the 6-digit number directly after the text SALES ORDER NO in the document header'}",
+  "customerPONo": "CUSTOMER P.O. NUMBER value (may contain letters and dashes)",
+  "orderDate": "date next to REV DATE label in MM/DD/YYYY format",
+  "scheduledShip": "date after SCHEDULED SHIP: text in MM/DD/YYYY format",
+  "requestedDate": "date after REQUESTED: text in MM/DD/YYYY format",
+  "customer": "company name under CUSTOMER label",
   "shipToAddress": "full ship-to address as one string",
-  "salesRep": "SALES REPRESENTATIVE",
-  "paymentTerms": "payment terms",
+  "salesRep": "SALES REPRESENTATIVE value",
+  "paymentTerms": "PAYMENT TERMS value",
   "items": [{"lineNo":"001","productNo":"","description":"short description max 80 chars","qty":0,"unit":"Ea","unitPrice":0,"total":0,"qtyShipped":0,"qtyBalance":0}],
   "orderTotal": 0,
   "status": "pending",
