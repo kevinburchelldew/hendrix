@@ -327,7 +327,7 @@ async function callAI(prompt){
 async function handleOrderPDF(text,filename,status){
   const raw=await callAI(`Parse this Marmon Utility order acknowledgement for D'Ewart Representatives. Return ONLY raw JSON, no markdown:
 {
-  "salesOrderNo": "the 6-digit SALES ORDER NO number found in the header next to the text SALES ORDER NO (e.g. 130513) — NOT the customer number",
+  "salesOrderNo": "the numeric-only SALES ORDER NO printed in large bold text in the document header directly under or next to the words SALES ORDER NO — it is typically a 6-digit number like 130513. Do NOT use the customer number (which contains letters like 000056-m05), do NOT use the PO number, do NOT use any number containing letters or dashes",
   "customerPONo": "CUSTOMER P.O. NUMBER",
   "orderDate": "YYYY-MM-DD",
   "scheduledShip": "YYYY-MM-DD from SCHEDULED SHIP label",
