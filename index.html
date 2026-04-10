@@ -325,9 +325,10 @@ async function callAI(prompt){
 }
 
 async function handleOrderPDF(text,filename,status){
-  // Extract Sales Order # directly from text using regex before sending to AI
+  // Extract Sales Order # from filename first, then fall back to regex in text
+  const fnMatch = filename.match(/(\d{5,7})/);
   const soMatch = text.match(/SALES\s+ORDER\s+NO[^\d]*(\d{5,7})/i);
-  const extractedSO = soMatch ? soMatch[1] : '';
+  const extractedSO = fnMatch ? fnMatch[1] : (soMatch ? soMatch[1] : '');
 
   const raw=await callAI(`Parse this Marmon Utility order acknowledgement for D'Ewart Representatives. Return ONLY raw JSON, no markdown:
 {
@@ -348,6 +349,8 @@ async function handleOrderPDF(text,filename,status){
 Document: ${text.slice(0,5000)}`);
   const order=JSON.parse(raw);
   order.id=Date.now();order.filename=filename;
+  // always use the filename/regex extracted SO# if available — more reliable than AI
+  if(extractedSO) order.salesOrderNo=extractedSO;
   // set initial balance = ordered qty
   (order.items||[]).forEach(i=>{if(!i.qtyBalance)i.qtyBalance=i.qty;});
   const exists=orders.findIndex(o=>o.salesOrderNo===order.salesOrderNo);
