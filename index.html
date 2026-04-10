@@ -486,7 +486,11 @@ function showDetail(id){
   const tBal=o.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
   document.getElementById('order-detail').innerHTML=`<div class="detail-panel">
     <button class="close-btn" onclick="document.getElementById('order-detail').innerHTML=''">×</button>
-    <div style="font-size:15px;font-weight:600;margin-bottom:14px">Sales Order ${o.salesOrderNo||'—'} &nbsp;${statusBadge(o)}</div>
+    <div style="font-size:15px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:10px">
+      Sales Order ${o.salesOrderNo||'—'} &nbsp;${statusBadge(o)}
+      <button onclick="showEditForm('${o.id}')" style="margin-left:auto;padding:4px 12px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px;font-weight:500">Edit</button>
+      <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
+    </div>
     <div class="detail-grid">
       <div class="df"><label>Customer</label><span>${o.customer||'—'}</span></div>
       <div class="df"><label>Customer PO #</label><span style="font-family:monospace">${o.customerPONo||'—'}</span></div>
@@ -515,6 +519,61 @@ function showDetail(id){
     ${(o.shipments||[]).length?`<div class="ship-events"><div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Shipment history</div>${o.shipments.map(s=>`<div class="ship-event"><div class="ship-event-icon">✓</div><div><div style="font-weight:600">Invoice ${s.invoiceNo} — ${fmt(s.invoiceTotal)}</div><div style="color:#888;margin-top:2px">Shipped ${fmtDate(s.actualShipDate)} &nbsp;·&nbsp; Invoiced ${fmtDate(s.invoiceDate)}</div></div></div>`).join('')}</div>`:''}
   </div>`;
   document.getElementById('order-detail').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function showEditForm(id){
+  const o=orders.find(x=>String(x.id)===String(id));if(!o)return;
+  const toInput=s=>{const d=parseDate(s);return d||s||'';};
+  document.getElementById('order-detail').innerHTML=`<div class="detail-panel">
+    <button class="close-btn" onclick="showDetail('${o.id}')">×</button>
+    <div style="font-size:15px;font-weight:600;margin-bottom:14px">Edit Order ${o.salesOrderNo||'—'}</div>
+    <div class="detail-grid">
+      <div class="df"><label>Sales order #</label><input id="e-sono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.salesOrderNo||''}"></div>
+      <div class="df"><label>Customer PO #</label><input id="e-pono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerPONo||''}"></div>
+      <div class="df"><label>Customer name</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}"></div>
+      <div class="df"><label>Scheduled ship (MM/DD/YYYY)</label><input id="e-ship" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.scheduledShip)}"></div>
+      <div class="df"><label>Order date (MM/DD/YYYY)</label><input id="e-date" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.orderDate)}"></div>
+      <div class="df"><label>Order total ($)</label><input id="e-total" type="number" step="0.01" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.orderTotal||0}"></div>
+      <div class="df"><label>Status</label>
+        <select id="e-status" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:13px">
+          <option value="pending" ${o.status==='pending'?'selected':''}>Pending</option>
+          <option value="partial" ${o.status==='partial'?'selected':''}>Partial</option>
+          <option value="shipped" ${o.status==='shipped'?'selected':''}>Shipped</option>
+          <option value="backorder" ${o.status==='backorder'?'selected':''}>Backorder</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button onclick="saveEdit('${o.id}')" style="padding:8px 20px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Save changes</button>
+      <button onclick="showDetail('${o.id}')" style="padding:8px 20px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:13px">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function saveEdit(id){
+  const idx=orders.findIndex(x=>String(x.id)===String(id));if(idx<0)return;
+  const o=orders[idx];
+  o.salesOrderNo=document.getElementById('e-sono').value.trim();
+  o.customerPONo=document.getElementById('e-pono').value.trim();
+  o.customer=document.getElementById('e-cust').value.trim();
+  o.scheduledShip=parseDate(document.getElementById('e-ship').value.trim())||document.getElementById('e-ship').value.trim();
+  o.orderDate=parseDate(document.getElementById('e-date').value.trim())||document.getElementById('e-date').value.trim();
+  o.orderTotal=parseFloat(document.getElementById('e-total').value)||0;
+  o.status=document.getElementById('e-status').value;
+  orders[idx]=o;
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  renderDashboard();renderOrders();
+  showDetail(id);
+}
+
+function deleteOrder(id){
+  if(!confirm('Delete this order? This cannot be undone.'))return;
+  orders=orders.filter(x=>String(x.id)!==String(id));
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  document.getElementById('order-detail').innerHTML='';
+  renderDashboard();renderOrders();
 }
 
 function switchTab(t){
