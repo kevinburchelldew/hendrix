@@ -368,30 +368,62 @@ Document: ${text.slice(0,5000)}`);
   await saveToOneDrive();renderDashboard();renderOrders();
 }
 
+function applyInvoiceManual(){
+  const sel=document.getElementById('manual-match');
+  if(!sel||!sel.value){alert('Please select an order.');return;}
+  const inv=window._pendingInv;
+  if(!inv){alert('No pending invoice.');return;}
+  const idx=orders.findIndex(o=>String(o.id)===sel.value);
+  if(idx<0){alert('Order not found.');return;}
+  applyInvoiceToOrder(inv, idx, document.getElementById('upload-status'));
+}
+
 async function handleInvoicePDF(text,filename,status){
+  // Extract SO# from filename first
+  const fnMatch = filename.match(/(\d{5,7})/);
+  const extractedSO = fnMatch ? fnMatch[1] : '';
+
   const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY raw JSON, no markdown:
 {
-  "salesOrderNo": "Sales Order number this invoice relates to",
+  "salesOrderNo": "${extractedSO || 'the 6-digit numeric-only Sales Order number — NOT the customer PO number which contains letters'}",
   "invoiceNo": "invoice number",
-  "invoiceDate": "YYYY-MM-DD",
-  "actualShipDate": "YYYY-MM-DD ship or invoice date",
+  "invoiceDate": "date in MM/DD/YYYY format",
+  "actualShipDate": "ship date in MM/DD/YYYY format",
   "items": [{"lineNo":"001","productNo":"","qtyShipped":0,"qtyBalance":0,"unit":"Ea","unitPrice":0,"total":0}],
   "invoiceTotal": 0
 }
 Document: ${text.slice(0,5000)}`);
   const inv=JSON.parse(raw);
-  const idx=orders.findIndex(o=>o.salesOrderNo===inv.salesOrderNo);
+  // Override with filename-extracted SO# if available
+  if(extractedSO) inv.salesOrderNo=extractedSO;
+  // Try matching on salesOrderNo first, then fall back to customerPONo
+  let idx=orders.findIndex(o=>o.salesOrderNo===inv.salesOrderNo);
+  if(idx<0) idx=orders.findIndex(o=>o.customerPONo===inv.salesOrderNo);
   if(idx<0){
-    status.innerHTML=`<div class="msg-err">No order found for Sales Order # <strong>${inv.salesOrderNo}</strong>. Import the order acknowledgement first.</div>`;
+    // Show manual match dropdown so user can pick the right order
+    const opts=orders.map(o=>`<option value="${o.id}">${o.salesOrderNo} — ${o.customer} — PO# ${o.customerPONo||'—'}</option>`).join('');
+    status.innerHTML=`<div class="msg-warn" style="margin-top:10px">
+      <div style="font-weight:600;margin-bottom:8px">Could not automatically match invoice to an order. Please select the order this invoice belongs to:</div>
+      <select id="manual-match" style="width:100%;height:32px;border-radius:8px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;margin-bottom:10px">
+        <option value="">— Select an order —</option>
+        ${opts}
+      </select>
+      <button onclick="applyInvoiceManual()" style="padding:6px 16px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Apply Invoice</button>
+    </div>`;
+    window._pendingInv = inv;
     return;
   }
+  applyInvoiceToOrder(inv, idx, status);
+}
+
+async function applyInvoiceToOrder(inv, idx, status){
   const order=orders[idx];
   (inv.items||[]).forEach(ii=>{
     const oi=order.items?.find(x=>x.lineNo===ii.lineNo||x.productNo===ii.productNo);
     if(oi){oi.qtyShipped=(oi.qtyShipped||0)+ii.qtyShipped;oi.qtyBalance=ii.qtyBalance;}
   });
   if(!order.shipments)order.shipments=[];
-  order.shipments.push({invoiceNo:inv.invoiceNo,invoiceDate:inv.invoiceDate,actualShipDate:inv.actualShipDate,invoiceTotal:inv.invoiceTotal,filename});
+  order.shipments.push({invoiceNo:inv.invoiceNo,invoiceDate:inv.invoiceDate,actualShipDate:inv.actualShipDate,invoiceTotal:inv.invoiceTotal});
   const totalShipped=order.items?.reduce((a,i)=>a+(i.qtyShipped||0),0)||0;
   const totalBalance=order.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
   if(totalBalance>0&&totalShipped>0)order.status='partial';
@@ -403,7 +435,7 @@ Document: ${text.slice(0,5000)}`);
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();
   const balMsg=totalBalance>0?` — ${totalBalance.toLocaleString()} units on backorder`:'';
-  status.innerHTML=`<div class="msg-ok">✓ Invoice ${inv.invoiceNo} applied to SO ${inv.salesOrderNo} — ${totalShipped.toLocaleString()} units shipped${balMsg}</div>`;
+  status.innerHTML=`<div class="msg-ok">✓ Invoice ${inv.invoiceNo} applied to SO ${order.salesOrderNo} — ${totalShipped.toLocaleString()} units shipped${balMsg}</div>`;
   renderDashboard();renderOrders();
 }
 
