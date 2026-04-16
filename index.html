@@ -449,8 +449,8 @@ async function handleInvoicePDF(text,filename,status){
   // Extract SO# from "OUR ORDER:" text on the invoice
   const ourOrderMatch = text.match(/OUR\s+ORDER[:\s]*(\d{5,7})/i);
   const extractedSO = ourOrderMatch ? ourOrderMatch[1] : '';
-  // Also extract invoice # from filename or text
-  const invMatch = filename.match(/(\d{5,7})/);
+  // Also extract invoice # from filename — allow longer numbers (invoice #s can be 10+ digits)
+  const invMatch = filename.match(/(\d{5,12})/);
   const extractedInv = invMatch ? invMatch[1] : '';
 
   const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY raw JSON, no markdown:
