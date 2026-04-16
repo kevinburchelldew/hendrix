@@ -350,34 +350,59 @@ async function callAI(prompt){
 }
 
 async function handleOrderPDF(text,filename,status){
-  // Extract Sales Order # from filename first, then fall back to regex in text
+  // Regex-based extraction for key fields — much more reliable than AI
   const fnMatch = filename.match(/(\d{5,7})/);
-  const soMatch = text.match(/SALES\s+ORDER\s+NO[^\d]*(\d{5,7})/i);
+  const soMatch = text.match(/SALES\s+ORDER\s+NO[.:\s]*(\d{5,7})/i);
   const extractedSO = fnMatch ? fnMatch[1] : (soMatch ? soMatch[1] : '');
+  
+  // Customer PO # — typically appears before a date, alphanumeric with dashes
+  const poMatch = text.match(/CUSTOMER\s+P\.?O\.?\s+NUMBER\s+P\.?O\.?\s+DATE[^\n]*\n?\s*([\w\-]+)\s+(\d{2}\/\d{2}\/\d{4})/i);
+  const extractedPO = poMatch ? poMatch[1] : '';
+  const extractedOrderDate = poMatch ? poMatch[2] : '';
+  
+  // Find total from last occurrence of "TOTAL" followed by a number
+  const totalMatches = [...text.matchAll(/TOTAL\s+([\d,]+\.\d{2})/gi)];
+  const extractedTotal = totalMatches.length ? parseFloat(totalMatches[totalMatches.length-1][1].replace(/,/g,'')) : 0;
+  
+  // Strip the terms & conditions boilerplate — everything after the first "TERMS & CONDITIONS" heading
+  let cleanText = text;
+  const tcIdx = text.search(/TERMS\s*&\s*CONDITIONS\s+OF\s+SALE/i);
+  if(tcIdx > 0) cleanText = text.slice(0, tcIdx);
 
-  const raw=await callAI(`Parse this Marmon Utility order acknowledgement for D'Ewart Representatives. Return ONLY raw JSON, no markdown:
+  const raw=await callAI(`Parse this Marmon Utility order acknowledgement. Return ONLY raw JSON, no markdown. Pay close attention to extracting EVERY line item — there may be multiple (001, 002, 003, etc.).
+
+Required JSON shape:
 {
-  "salesOrderNo": "${extractedSO || 'find the 6-digit number directly after the text SALES ORDER NO in the document header'}",
-  "customerPONo": "CUSTOMER P.O. NUMBER value (may contain letters and dashes)",
-  "orderDate": "date next to REV DATE label in MM/DD/YYYY format",
-  "scheduledShip": "date after SCHEDULED SHIP: text in MM/DD/YYYY format",
-  "requestedDate": "date after REQUESTED: text in MM/DD/YYYY format",
-  "customer": "company name under CUSTOMER label",
-  "customerCity": "city from the ship-to address",
-  "customerState": "2-letter state abbreviation from the ship-to address",
-  "shipToAddress": "full ship-to address as one string",
+  "customer": "company name from CUSTOMER section",
+  "customerCity": "city from ship-to address",
+  "customerState": "2-letter state abbreviation",
+  "shipToAddress": "full ship-to address",
   "salesRep": "SALES REPRESENTATIVE value",
   "paymentTerms": "PAYMENT TERMS value",
-  "items": [{"lineNo":"001","productNo":"","description":"short description max 80 chars","qty":0,"unit":"Ea","unitPrice":0,"total":0,"qtyShipped":0,"qtyBalance":0}],
-  "orderTotal": 0,
-  "status": "pending",
-  "shipments": []
+  "scheduledShip": "SCHEDULED SHIP date in MM/DD/YYYY format from first line item",
+  "requestedDate": "REQUESTED date in MM/DD/YYYY format from first line item",
+  "items": [
+    {"lineNo":"001","productNo":"product code like HPI-15VTC","description":"short description max 60 chars","qty":0,"unit":"Ea","unitPrice":0,"total":0}
+  ]
 }
-Document: ${text.slice(0,5000)}`);
-  const order=JSON.parse(raw);
-  order.id=Date.now();order.filename=filename;
-  // always use the filename/regex extracted SO# if available — more reliable than AI
-  if(extractedSO) order.salesOrderNo=extractedSO;
+
+IMPORTANT: Include ALL line items. Each line starts with a 3-digit number like 001, 002, etc.
+
+Document:
+${cleanText.slice(0,6000)}`);
+  const parsed=JSON.parse(raw);
+  // Merge regex-extracted fields (always more reliable) with AI-parsed fields
+  const order={
+    ...parsed,
+    id: Date.now(),
+    filename: filename,
+    salesOrderNo: extractedSO || parsed.salesOrderNo || '',
+    customerPONo: extractedPO || parsed.customerPONo || '',
+    orderDate: extractedOrderDate || parsed.orderDate || '',
+    orderTotal: extractedTotal || parsed.orderTotal || 0,
+    status: 'pending',
+    shipments: []
+  };
   // set initial balance = ordered qty and apply default commission rates
   (order.items||[]).forEach(i=>{
     if(!i.qtyBalance)i.qtyBalance=i.qty;
