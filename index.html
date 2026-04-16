@@ -355,11 +355,27 @@ async function handleOrderPDF(text,filename,status){
   const soMatch = text.match(/SALES\s+ORDER\s+NO[.:\s]*(\d{5,7})/i);
   const extractedSO = fnMatch ? fnMatch[1] : (soMatch ? soMatch[1] : '');
   
-  // Customer PO # — appears right before the P.O. Date (MM/DD/YYYY) in the header row
-  // First try: typical format like "2825820-00 01/06/2026" or "4506069188RLS 01/02/2026"
-  const poMatch = text.match(/([A-Z0-9]{6,}(?:-\d+)?)\s+(\d{2}\/\d{2}\/\d{4})\s+D['']?Ewart/i);
-  const extractedPO = poMatch ? poMatch[1] : '';
-  const extractedOrderDate = poMatch ? poMatch[2] : '';
+  // Customer PO # and date — look for the pattern "XXXXXX-XX MM/DD/YYYY" or "XXXXXXXRLS MM/DD/YYYY"
+  // The PO# comes right before the first date in the document header
+  let extractedPO = '';
+  let extractedOrderDate = '';
+  // Try: alphanumeric with optional -XX suffix, followed by MM/DD/YYYY
+  const poPatterns = [
+    /([A-Z0-9]{5,}(?:-\d{2,3})?[A-Z]*)\s+(\d{1,2}\/\d{1,2}\/\d{4})/g,
+    /(\d{7,10}[A-Z]*(?:-\d{2})?)\s+(\d{1,2}\/\d{1,2}\/\d{4})/g
+  ];
+  for(const pattern of poPatterns){
+    const matches = [...text.matchAll(pattern)];
+    for(const m of matches){
+      // skip if it's clearly not a PO# (e.g., just a date or the sales order #)
+      if(m[1].length < 5) continue;
+      if(/^\d{5,7}$/.test(m[1]) && m[1].length <= 7) continue; // likely the SO#
+      extractedPO = m[1];
+      extractedOrderDate = m[2];
+      break;
+    }
+    if(extractedPO) break;
+  }
   
   // Find total from last occurrence of "TOTAL" followed by a number
   const totalMatches = [...text.matchAll(/TOTAL\s+([\d,]+\.\d{2})/gi)];
@@ -374,6 +390,8 @@ async function handleOrderPDF(text,filename,status){
 
 Required JSON shape:
 {
+  "customerPONo": "the CUSTOMER P.O. NUMBER value (alphanumeric like 2825820-00 or 4506069188RLS)",
+  "orderDate": "the P.O. DATE in MM/DD/YYYY format",
   "customer": "company name from CUSTOMER section",
   "customerCity": "city from ship-to address",
   "customerState": "2-letter state abbreviation",
