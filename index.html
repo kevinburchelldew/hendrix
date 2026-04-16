@@ -911,21 +911,69 @@ function deleteCommissionRate(product){
 function renderCommissionRates(){
   const el=document.getElementById('commission-list');
   if(!el)return;
-  const entries=Object.entries(commissionRates).sort((a,b)=>a[0].localeCompare(b[0]));
-  if(!entries.length){el.innerHTML='<div class="empty">No rates set yet — add a product number and rate above</div>';return;}
-  el.innerHTML=`<table><thead><tr><th>Product #</th><th>Commission %</th><th>Est. commission on open orders</th><th></th></tr></thead>
-  <tbody>${entries.map(([p,r])=>{
+  // Collect all products: ones with rates set + all unique products from orders
+  const orderProducts=new Set();
+  const productStats={};
+  orders.forEach(o=>(o.items||[]).forEach(it=>{
+    if(!it.productNo)return;
+    const p=it.productNo.toUpperCase();
+    orderProducts.add(p);
+    if(!productStats[p])productStats[p]={description:it.description||'',orderCount:0,totalValue:0};
+    productStats[p].orderCount++;
+    productStats[p].totalValue+=(it.total||0);
+    if(!productStats[p].description&&it.description)productStats[p].description=it.description;
+  }));
+  // Combine products that have rates OR appear in orders
+  const allProducts=new Set([...Object.keys(commissionRates),...orderProducts]);
+  const entries=[...allProducts].sort();
+  if(!entries.length){el.innerHTML='<div class="empty">No products yet — add a product number above or import an order to see products here</div>';return;}
+  el.innerHTML=`<table><thead><tr>
+    <th>Product #</th>
+    <th>Description</th>
+    <th>Orders</th>
+    <th>Commission %</th>
+    <th>Est. commission on open orders</th>
+    <th></th>
+  </tr></thead>
+  <tbody>${entries.map(p=>{
+    const rate=commissionRates[p];
+    const hasRate=rate!==undefined;
+    const stats=productStats[p]||{description:'',orderCount:0};
     const openTotal=orders.filter(o=>getStatus(o)!=='shipped').reduce((sum,o)=>{
       const item=o.items?.find(i=>i.productNo?.toUpperCase()===p);
       return sum+(item?item.total||0:0);
     },0);
     return`<tr>
       <td style="font-family:monospace;font-weight:600">${p}</td>
-      <td>${r}%</td>
-      <td style="color:#0F6E56;font-weight:600">${openTotal>0?fmt(openTotal*(r/100)):'—'}</td>
-      <td><button onclick="deleteCommissionRate('${p}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Remove</button></td>
+      <td style="font-size:12px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${stats.description||''}">${stats.description?stats.description.slice(0,50)+(stats.description.length>50?'…':''):'—'}</td>
+      <td style="color:#888">${stats.orderCount||'—'}</td>
+      <td>
+        <input type="number" step="0.1" min="0" max="100" value="${hasRate?rate:''}" placeholder="—" style="width:70px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px;text-align:center" onchange="setRateInline('${p}',this.value)">
+      </td>
+      <td style="color:#0F6E56;font-weight:600">${hasRate&&openTotal>0?fmt(openTotal*(rate/100)):'—'}</td>
+      <td>${hasRate?`<button onclick="deleteCommissionRate('${p}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Clear</button>`:''}</td>
     </tr>`;
   }).join('')}</tbody></table>`;
+}
+
+function setRateInline(product,val){
+  const rate=parseFloat(val);
+  if(val===''||isNaN(rate)){delete commissionRates[product];}
+  else if(rate>=0&&rate<=100){commissionRates[product]=rate;}
+  else{alert('Rate must be between 0 and 100');renderCommissionRates();return;}
+  localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  // Update all existing orders with this product's new rate
+  orders.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      if(i.productNo?.toUpperCase()===product){
+        i.commissionPct=commissionRates[product]??null;
+      }
+    });
+  });
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  renderCommissionRates();
+  renderDashboard();
 }
 
 function getCommission(productNo){
