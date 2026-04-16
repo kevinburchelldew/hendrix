@@ -179,6 +179,8 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
         <option value="date-asc">Oldest first</option>
         <option value="ship-asc">Ship date soonest</option>
         <option value="total-desc">Highest value</option>
+        <option value="so-asc">SO# ascending</option>
+        <option value="so-desc">SO# descending</option>
       </select>
     </div>
     <div class="filter-pills">
@@ -732,6 +734,8 @@ function renderOrders(){
     if(sort==='date-asc')return(a.orderDate||'')>(b.orderDate||'')?1:-1;
     if(sort==='ship-asc')return(a.scheduledShip||'9999')>(b.scheduledShip||'9999')?1:-1;
     if(sort==='total-desc')return(b.orderTotal||0)-(a.orderTotal||0);
+    if(sort==='so-asc')return(a.salesOrderNo||'').localeCompare(b.salesOrderNo||'',undefined,{numeric:true});
+    if(sort==='so-desc')return(b.salesOrderNo||'').localeCompare(a.salesOrderNo||'',undefined,{numeric:true});
     return 0;
   });
   const el=document.getElementById('orders-list');
