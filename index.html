@@ -201,7 +201,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const REDIRECT=location.href.split('?')[0].split('#')[0];
 let accessToken=null;
-let orders=JSON.parse(localStorage.getItem('dewart_orders')||'[]');
+let orders=[];
 let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
 let activeFilter='all';
@@ -238,7 +238,15 @@ function handleAuth(){
   const params=new URLSearchParams({client_id:clientId,response_type:'token',redirect_uri:REDIRECT,scope:'Files.ReadWrite',response_mode:'fragment',prompt:'select_account'});
   location.href='https://login.microsoftonline.com/common/oauth2/v2.0/authorize?'+params;
 }
-function signOut(){accessToken=null;updateAuthUI(false);setSyncStatus('Signed out','');}
+function signOut(){
+  accessToken=null;
+  orders=[];
+  localStorage.removeItem('dewart_orders');
+  updateAuthUI(false);
+  setSyncStatus('Signed out','');
+  document.getElementById('tab-dashboard').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
+  document.getElementById('tab-orders').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
+}
 function updateAuthUI(ok){document.getElementById('auth-btn').innerHTML=ok?'Sign out':'<svg width="16" height="16" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg> Sign out';}
 function setSyncStatus(msg,type){const el=document.getElementById('sync-status');el.textContent=msg;el.className='sync-status'+(type?' '+type:'');}
 
@@ -591,7 +599,13 @@ function switchTab(t){
   if(t==='orders')renderOrders();
 }
 
-checkToken();renderDashboard();renderOrders();
+checkToken();
+if(!accessToken){
+  document.getElementById('tab-dashboard').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
+  document.getElementById('tab-orders').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
+} else {
+  renderDashboard();renderOrders();
+}
 </script>
 </body>
 </html>
