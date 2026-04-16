@@ -402,23 +402,27 @@ function applyInvoiceManual(){
 }
 
 async function handleInvoicePDF(text,filename,status){
-  // Extract SO# from filename first
-  const fnMatch = filename.match(/(\d{5,7})/);
-  const extractedSO = fnMatch ? fnMatch[1] : '';
+  // Extract SO# from "OUR ORDER:" text on the invoice
+  const ourOrderMatch = text.match(/OUR\s+ORDER[:\s]*(\d{5,7})/i);
+  const extractedSO = ourOrderMatch ? ourOrderMatch[1] : '';
+  // Also extract invoice # from filename or text
+  const invMatch = filename.match(/(\d{5,7})/);
+  const extractedInv = invMatch ? invMatch[1] : '';
 
   const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY raw JSON, no markdown:
 {
-  "salesOrderNo": "${extractedSO || 'the 6-digit numeric-only Sales Order number — NOT the customer PO number which contains letters'}",
-  "invoiceNo": "invoice number",
-  "invoiceDate": "date in MM/DD/YYYY format",
-  "actualShipDate": "ship date in MM/DD/YYYY format",
+  "salesOrderNo": "${extractedSO || 'the number after OUR ORDER: label'}",
+  "invoiceNo": "${extractedInv || 'INVOICE NO value from document header'}",
+  "invoiceDate": "INVOICE DATE value in MM/DD/YYYY format",
+  "actualShipDate": "DATE SHIPPED value in MM/DD/YYYY format",
   "items": [{"lineNo":"001","productNo":"","qtyShipped":0,"qtyBalance":0,"unit":"Ea","unitPrice":0,"total":0}],
   "invoiceTotal": 0
 }
 Document: ${text.slice(0,5000)}`);
   const inv=JSON.parse(raw);
-  // Override with filename-extracted SO# if available
+  // Override with regex-extracted SO# if available — more reliable than AI
   if(extractedSO) inv.salesOrderNo=extractedSO;
+  if(extractedInv) inv.invoiceNo=extractedInv;
   // Try matching on salesOrderNo first, then fall back to customerPONo
   let idx=orders.findIndex(o=>o.salesOrderNo===inv.salesOrderNo);
   if(idx<0) idx=orders.findIndex(o=>o.customerPONo===inv.salesOrderNo);
