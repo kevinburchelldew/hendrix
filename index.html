@@ -676,7 +676,7 @@ function renderDashboard(){
   const topProds=Object.entries(productStats)
     .sort((a,b)=>productMode==='revenue'?b[1].revenue-a[1].revenue:b[1].units-a[1].units)
     .slice(0,5);
-  const maxProd=topProds[0]?.(productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units)||1;
+  const maxProd=topProds[0]?(productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units):1;
   const tpEl=document.getElementById('top-products');
   if(tpEl){
     tpEl.innerHTML=topProds.length?topProds.map(([p,s])=>{
