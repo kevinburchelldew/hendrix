@@ -28,7 +28,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1
 .tab{padding:7px 18px;font-size:13px;cursor:pointer;border:none;background:none;color:#888;border-radius:8px;font-weight:500}
 .tab.active{background:#1a1a1a;color:#fff}
 .section{display:none}.section.active{display:block}
-.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:1.25rem}
+.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:1.25rem}
 .metric{background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:14px}
 .metric-label{font-size:11px;color:#888;margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em}
 .metric-value{font-size:24px;font-weight:600}
@@ -125,6 +125,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
       <div class="metric"><div class="metric-label">Total value</div><div class="metric-value" style="color:#0F6E56" id="m-revenue">$0</div></div>
       <div class="metric"><div class="metric-label">Pending shipment</div><div class="metric-value" style="color:#E65100" id="m-pending">0</div></div>
       <div class="metric"><div class="metric-label">Backordered</div><div class="metric-value" style="color:#4527A0" id="m-backorder">0</div></div>
+      <div class="metric"><div class="metric-label">Total units sold</div><div class="metric-value" style="color:#185FA5" id="m-units">0</div></div>
     </div>
     <div class="dash-grid">
       <div class="card">
@@ -362,6 +363,8 @@ async function handleOrderPDF(text,filename,status){
   "scheduledShip": "date after SCHEDULED SHIP: text in MM/DD/YYYY format",
   "requestedDate": "date after REQUESTED: text in MM/DD/YYYY format",
   "customer": "company name under CUSTOMER label",
+  "customerCity": "city from the ship-to address",
+  "customerState": "2-letter state abbreviation from the ship-to address",
   "shipToAddress": "full ship-to address as one string",
   "salesRep": "SALES REPRESENTATIVE value",
   "paymentTerms": "PAYMENT TERMS value",
@@ -500,6 +503,8 @@ function renderDashboard(){
   document.getElementById('m-revenue').textContent=fmt(total);
   document.getElementById('m-pending').textContent=pending;
   document.getElementById('m-backorder').textContent=backorder;
+  const totalUnits=orders.reduce((a,o)=>a+((o.items||[]).reduce((s,i)=>s+(i.qtyShipped||0),0)),0);
+  document.getElementById('m-units').textContent=totalUnits.toLocaleString();
   const byC={};orders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
@@ -526,7 +531,7 @@ function renderOrders(){
   });
   const el=document.getElementById('orders-list');
   if(!filtered.length){el.innerHTML='<div class="empty">'+(orders.length?'No matching orders':'No orders yet — use Import PDF to get started')+'</div>';return;}
-  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${filtered.map(o=>{
+  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>City, State</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${filtered.map(o=>{
     const tOrd=o.items?.reduce((a,i)=>a+(i.qty||0),0)||0;
     const tShp=o.items?.reduce((a,i)=>a+(i.qtyShipped||0),0)||0;
     const tBal=o.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
@@ -535,6 +540,7 @@ function renderOrders(){
       <td style="font-family:monospace">${o.customerPONo||'—'}</td>
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
       <td>${o.customer||'—'}</td>
+      <td style="color:#888;white-space:nowrap">${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</td>
       <td style="color:#888">${o.items?.[0]?.productNo||'—'}</td>
       <td>${tOrd.toLocaleString()}</td>
       <td style="color:#2E7D32;font-weight:${tShp>0?600:400}">${tShp>0?tShp.toLocaleString():'—'}</td>
@@ -560,6 +566,7 @@ function showDetail(id){
     </div>
     <div class="detail-grid">
       <div class="df"><label>Customer</label><span>${o.customer||'—'}</span></div>
+      <div class="df"><label>City, State</label><span>${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</span></div>
       <div class="df"><label>Customer PO #</label><span style="font-family:monospace">${o.customerPONo||'—'}</span></div>
       <div class="df"><label>Order date</label><span>${fmtDate(o.orderDate)}</span></div>
       <div class="df"><label>Scheduled ship</label><span>${fmtDate(o.scheduledShip)}</span></div>
@@ -599,7 +606,9 @@ function showEditForm(id){
     <div class="detail-grid">
       <div class="df"><label>Sales order #</label><input id="e-sono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.salesOrderNo||''}"></div>
       <div class="df"><label>Customer PO #</label><input id="e-pono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerPONo||''}"></div>
-      <div class="df"><label>Customer name</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}"></div>
+      <div class="df"><label>Customer name</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}">
+      <div class="df"><label>City</label><input id="e-city" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerCity||''}">
+      <div class="df"><label>State</label><input id="e-state" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.customerState||''}"></div>
       <div class="df"><label>Scheduled ship (MM/DD/YYYY)</label><input id="e-ship" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.scheduledShip)}"></div>
       <div class="df"><label>Order date (MM/DD/YYYY)</label><input id="e-date" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.orderDate)}"></div>
       <div class="df"><label>Order total ($)</label><input id="e-total" type="number" step="0.01" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.orderTotal||0}"></div>
@@ -625,6 +634,8 @@ function saveEdit(id){
   o.salesOrderNo=document.getElementById('e-sono').value.trim();
   o.customerPONo=document.getElementById('e-pono').value.trim();
   o.customer=document.getElementById('e-cust').value.trim();
+  o.customerCity=document.getElementById('e-city')?.value.trim()||o.customerCity||'';
+  o.customerState=document.getElementById('e-state')?.value.trim().toUpperCase()||o.customerState||'';
   o.scheduledShip=parseDate(document.getElementById('e-ship').value.trim())||document.getElementById('e-ship').value.trim();
   o.orderDate=parseDate(document.getElementById('e-date').value.trim())||document.getElementById('e-date').value.trim();
   o.orderTotal=parseFloat(document.getElementById('e-total').value)||0;
