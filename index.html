@@ -152,6 +152,22 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
         <div id="state-revenue"><div class="empty">No data yet</div></div>
       </div>
     </div>
+    <div class="dash-grid">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+          <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em">Top products by revenue</div>
+          <div style="display:flex;gap:4px">
+            <button class="prod-toggle active" data-mode="revenue" onclick="setProductMode('revenue')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#1a1a1a;color:#fff;cursor:pointer;font-size:11px;font-weight:500">Revenue</button>
+            <button class="prod-toggle" data-mode="units" onclick="setProductMode('units')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;color:#666;cursor:pointer;font-size:11px;font-weight:500">Units</button>
+          </div>
+        </div>
+        <div id="top-products"><div class="empty">No data yet</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Product mix</div>
+        <div id="product-mix"><div class="empty">No data yet</div></div>
+      </div>
+    </div>
   </div>
 
   <!-- ORDERS -->
@@ -237,6 +253,7 @@ let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
 let commissionRates=JSON.parse(localStorage.getItem('dewart_commission_rates')||'{}');
 let activeFilter='all';
+let productMode='revenue';
 
 if(clientId){
   document.getElementById('clientid-input').value=clientId;
@@ -642,6 +659,57 @@ function renderDashboard(){
         <div class="bar-val">${fmt(rev)}</div>
       </div>`).join(''):'<div class="empty">No data yet</div>';
   }
+  
+  // Top products by revenue or units
+  const productStats={};
+  orders.forEach(o=>{
+    (o.items||[]).forEach(it=>{
+      const key=it.productNo||'Unknown';
+      if(!productStats[key])productStats[key]={revenue:0,units:0,unitsShipped:0,description:it.description||''};
+      productStats[key].revenue+=(it.total||0);
+      productStats[key].units+=(it.qty||0);
+      productStats[key].unitsShipped+=(it.qtyShipped||0);
+    });
+  });
+  const topProds=Object.entries(productStats)
+    .sort((a,b)=>productMode==='revenue'?b[1].revenue-a[1].revenue:b[1].units-a[1].units)
+    .slice(0,5);
+  const maxProd=topProds[0]?.(productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units)||1;
+  const tpEl=document.getElementById('top-products');
+  if(tpEl){
+    tpEl.innerHTML=topProds.length?topProds.map(([p,s])=>{
+      const val=productMode==='revenue'?s.revenue:s.units;
+      const maxVal=productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units;
+      return`<div class="bar-row" style="margin-bottom:10px">
+        <div style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:11px;font-weight:600" title="${p}">${p}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round(val/maxVal*100)}%;background:#0F6E56"></div></div>
+        <div class="bar-val" style="min-width:75px">${productMode==='revenue'?fmt(val):val.toLocaleString()+' units'}</div>
+      </div>`;
+    }).join(''):'<div class="empty">No data yet</div>';
+  }
+  
+  // Product mix — shipped vs backorder
+  const pmEl=document.getElementById('product-mix');
+  if(pmEl){
+    const allProds=Object.entries(productStats).sort((a,b)=>b[1].revenue-a[1].revenue).slice(0,5);
+    pmEl.innerHTML=allProds.length?`<table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="padding:6px 4px;text-align:left;font-size:10px;color:#888;border-bottom:1px solid #e5e5e5;text-transform:uppercase;letter-spacing:.04em">Product</th>
+        <th style="padding:6px 4px;text-align:right;font-size:10px;color:#888;border-bottom:1px solid #e5e5e5;text-transform:uppercase;letter-spacing:.04em">Ordered</th>
+        <th style="padding:6px 4px;text-align:right;font-size:10px;color:#888;border-bottom:1px solid #e5e5e5;text-transform:uppercase;letter-spacing:.04em">Shipped</th>
+        <th style="padding:6px 4px;text-align:right;font-size:10px;color:#888;border-bottom:1px solid #e5e5e5;text-transform:uppercase;letter-spacing:.04em">% Shipped</th>
+      </tr></thead>
+      <tbody>${allProds.map(([p,s])=>{
+        const pct=s.units>0?Math.round(s.unitsShipped/s.units*100):0;
+        return`<tr>
+          <td style="padding:7px 4px;font-family:monospace;font-size:11px;font-weight:600;border-bottom:1px solid #f5f5f5">${p}</td>
+          <td style="padding:7px 4px;text-align:right;font-size:12px;border-bottom:1px solid #f5f5f5">${s.units.toLocaleString()}</td>
+          <td style="padding:7px 4px;text-align:right;font-size:12px;color:#2E7D32;font-weight:600;border-bottom:1px solid #f5f5f5">${s.unitsShipped.toLocaleString()}</td>
+          <td style="padding:7px 4px;text-align:right;font-size:12px;color:${pct===100?'#2E7D32':pct>50?'#E65100':'#C62828'};font-weight:600;border-bottom:1px solid #f5f5f5">${pct}%</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`:'<div class="empty">No data yet</div>';
+  }
   const byC={};orders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
@@ -811,6 +879,15 @@ function updateCommissionPct(orderId, lineKey, val){
       cells[9].style.color='#0F6E56';cells[9].style.fontWeight='600';
     }
   });
+}
+
+function setProductMode(mode){
+  productMode=mode;
+  document.querySelectorAll('.prod-toggle').forEach(b=>{
+    if(b.dataset.mode===mode){b.style.background='#1a1a1a';b.style.color='#fff';}
+    else{b.style.background='#fff';b.style.color='#666';}
+  });
+  renderDashboard();
 }
 
 function addCommissionRate(){
