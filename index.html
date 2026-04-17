@@ -776,7 +776,7 @@ function renderOrders(){
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
       <td>${o.customer||'—'}</td>
       <td style="color:#888;white-space:nowrap">${(o.shipToCity||o.customerCity)&&(o.shipToState||o.customerState)?(o.shipToCity||o.customerCity)+', '+(o.shipToState||o.customerState):(o.shipToCity||o.customerCity||o.shipToState||o.customerState)||'—'}</td>
-      <td style="color:#888">${o.items?.[0]?.productNo||'—'}</td>
+      <td style="color:#888;font-size:11px">${(o.items||[]).length===0?'—':(o.items.length===1?o.items[0].productNo||'—':o.items.map(i=>i.productNo).filter(Boolean).slice(0,3).join(', ')+(o.items.length>3?` +${o.items.length-3}`:''))}</td>
       <td>${tOrd.toLocaleString()}</td>
       <td style="color:#2E7D32;font-weight:${tShp>0?600:400}">${tShp>0?tShp.toLocaleString():'—'}</td>
       <td style="color:${tBal>0?'#4527A0':'#aaa'};font-weight:${tBal>0?600:400}">${tBal>0?tBal.toLocaleString():'—'}</td>
