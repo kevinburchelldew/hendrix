@@ -157,7 +157,8 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
           <div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em">Top products by revenue</div>
           <div style="display:flex;gap:4px">
-            <button class="prod-toggle active" data-mode="revenue" onclick="setProductMode('revenue')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#1a1a1a;color:#fff;cursor:pointer;font-size:11px;font-weight:500">Revenue</button>
+            <button class="prod-toggle active" data-mode="revenue" onclick="setProductMode('revenue')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#1a1a1a;color:#fff;cursor:pointer;font-size:11px;font-weight:500">Ordered $</button>
+            <button class="prod-toggle" data-mode="shipped" onclick="setProductMode('shipped')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;color:#666;cursor:pointer;font-size:11px;font-weight:500">Shipped $</button>
             <button class="prod-toggle" data-mode="units" onclick="setProductMode('units')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;color:#666;cursor:pointer;font-size:11px;font-weight:500">Units</button>
           </div>
         </div>
@@ -680,32 +681,39 @@ function renderDashboard(){
       </div>`).join(''):'<div class="empty">No data yet</div>';
   }
   
-  // Top products by revenue or units
+  // Top products — track ordered $, shipped $, and units
   const productStats={};
   orders.forEach(o=>{
     (o.items||[]).forEach(it=>{
       const key=it.productNo||'Unknown';
-      if(!productStats[key])productStats[key]={revenue:0,units:0,unitsShipped:0,description:it.description||''};
+      if(!productStats[key])productStats[key]={revenue:0,shippedRevenue:0,units:0,unitsShipped:0,description:it.description||''};
       productStats[key].revenue+=(it.total||0);
+      productStats[key].shippedRevenue+=(it.qtyShipped||0)*(it.unitPrice||0);
       productStats[key].units+=(it.qty||0);
       productStats[key].unitsShipped+=(it.qtyShipped||0);
     });
   });
+  const getProdVal=s=>productMode==='revenue'?s.revenue:productMode==='shipped'?s.shippedRevenue:s.units;
   const topProds=Object.entries(productStats)
-    .sort((a,b)=>productMode==='revenue'?b[1].revenue-a[1].revenue:b[1].units-a[1].units)
+    .sort((a,b)=>getProdVal(b[1])-getProdVal(a[1]))
     .slice(0,5);
   const maxProd=topProds[0]?(productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units):1;
   const tpEl=document.getElementById('top-products');
   if(tpEl){
-    tpEl.innerHTML=topProds.length?topProds.map(([p,s])=>{
-      const val=productMode==='revenue'?s.revenue:s.units;
-      const maxVal=productMode==='revenue'?topProds[0][1].revenue:topProds[0][1].units;
-      return`<div class="bar-row" style="margin-bottom:10px">
-        <div style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:11px;font-weight:600" title="${p}">${p}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${Math.round(val/maxVal*100)}%;background:#0F6E56"></div></div>
-        <div class="bar-val" style="min-width:75px">${productMode==='revenue'?fmt(val):val.toLocaleString()+' units'}</div>
-      </div>`;
-    }).join(''):'<div class="empty">No data yet</div>';
+    if(!topProds.length){tpEl.innerHTML='<div class="empty">No data yet</div>';}
+    else {
+      const maxVal=getProdVal(topProds[0][1]);
+      tpEl.innerHTML=topProds.map(([p,s])=>{
+        const val=getProdVal(s);
+        const widthPct=maxVal>0?Math.round(val/maxVal*100):0;
+        const display=productMode==='units'?val.toLocaleString()+' units':fmt(val);
+        return`<div class="bar-row" style="margin-bottom:10px">
+          <div style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;font-size:11px;font-weight:600" title="${p}">${p}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${widthPct}%;background:#0F6E56"></div></div>
+          <div class="bar-val" style="min-width:80px">${display}</div>
+        </div>`;
+      }).join('');
+    }
   }
   
   // Product mix — shipped vs backorder
