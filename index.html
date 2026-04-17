@@ -815,18 +815,23 @@ function showDetail(id){
       <div class="df"><label>Sales rep</label><span>${o.salesRep||'—'}</span></div>
       <div class="df"><label>Ship to</label><span style="font-size:11px;line-height:1.6;font-weight:400">${o.shipToAddress||'—'}</span></div>
     </div>
-    <table class="items-tbl"><thead><tr><th>Line</th><th>Product #</th><th>Description</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Unit price</th><th>Total</th><th>Comm %</th><th>Comm $</th></tr></thead>
-    <tbody>${(o.items||[]).map(it=>`<tr>
-      <td>${it.lineNo||'—'}</td>
-      <td style="font-family:monospace">${it.productNo||'—'}</td>
-      <td style="color:#888">${it.description||'—'}</td>
-      <td>${(it.qty||0).toLocaleString()} ${it.unit||''}</td>
-      <td style="color:#2E7D32;font-weight:600">${(it.qtyShipped||0)>0?(it.qtyShipped).toLocaleString()+' '+it.unit:'—'}</td>
-      <td style="color:${(it.qtyBalance||0)>0?'#4527A0':'#aaa'};font-weight:${(it.qtyBalance||0)>0?600:400}">${(it.qtyBalance||0)>0?it.qtyBalance.toLocaleString()+' '+it.unit:'—'}</td>
-      <td>${fmt(it.unitPrice)}</td>
-      <td style="font-weight:600">${fmt(it.total)}</td>
-      <td><input type="number" step="0.1" min="0" max="100" value="${it.commissionPct??''}" placeholder="—" style="width:60px;height:26px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:12px;text-align:center" onchange="updateCommissionPct('${o.id}','${it.lineNo||it.productNo}',this.value)"></td>
-      <td style="color:#0F6E56;font-weight:600">${it.commissionPct!=null?fmt((it.total||0)*(it.commissionPct/100)):'—'}</td>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div style="font-size:11px;color:#888">Click any field to edit · Add or delete line items below</div>
+      <button onclick="addLineItem('${o.id}')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:11px;font-weight:500">+ Add line</button>
+    </div>
+    <table class="items-tbl"><thead><tr><th>Line</th><th>Product #</th><th>Description</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Unit $</th><th>Total</th><th>Comm %</th><th>Comm $</th><th></th></tr></thead>
+    <tbody>${(o.items||[]).map((it,idx)=>`<tr>
+      <td><input type="text" value="${it.lineNo||''}" style="width:45px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent" onchange="updateLineItem('${o.id}',${idx},'lineNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="text" value="${it.productNo||''}" style="width:100px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;font-family:monospace;background:transparent" onchange="updateLineItem('${o.id}',${idx},'productNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="text" value="${(it.description||'').replace(/"/g,'&quot;')}" style="width:100%;min-width:140px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;color:#888;background:transparent" onchange="updateLineItem('${o.id}',${idx},'description',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="number" value="${it.qty||0}" style="width:60px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right" onchange="updateLineItem('${o.id}',${idx},'qty',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="number" value="${it.qtyShipped||0}" style="width:60px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right;color:#2E7D32;font-weight:600" onchange="updateLineItem('${o.id}',${idx},'qtyShipped',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td style="color:${(it.qtyBalance||0)>0?'#4527A0':'#aaa'};font-weight:${(it.qtyBalance||0)>0?600:400};text-align:right">${Math.max(0,(it.qty||0)-(it.qtyShipped||0)).toLocaleString()}</td>
+      <td><input type="number" step="0.01" value="${it.unitPrice||0}" style="width:70px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right" onchange="updateLineItem('${o.id}',${idx},'unitPrice',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="number" step="0.01" value="${it.total||0}" style="width:80px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right;font-weight:600" onchange="updateLineItem('${o.id}',${idx},'total',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td><input type="number" step="0.1" min="0" max="100" value="${it.commissionPct??''}" placeholder="—" style="width:55px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:center" onchange="updateCommissionPct('${o.id}','${it.lineNo||it.productNo}',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td style="color:#0F6E56;font-weight:600;text-align:right">${it.commissionPct!=null?fmt((it.total||0)*(it.commissionPct/100)):'—'}</td>
+      <td><button onclick="deleteLineItem('${o.id}',${idx})" style="padding:2px 6px;border-radius:4px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:10px;color:#C62828">×</button></td>
     </tr>`).join('')}</tbody></table>
     <div style="text-align:right;font-size:13px;padding-top:10px;margin-top:8px;border-top:1px solid #f0f0f0">
       Ordered: <strong>${tOrd.toLocaleString()}</strong> &nbsp;|&nbsp; Shipped: <strong style="color:#2E7D32">${tShp.toLocaleString()}</strong> &nbsp;|&nbsp; Balance: <strong style="color:#4527A0">${tBal.toLocaleString()}</strong> &nbsp;|&nbsp; Order total: <strong>${fmt(o.orderTotal)}</strong>
@@ -899,6 +904,48 @@ function deleteOrder(id){
   saveToOneDrive();
   document.getElementById('order-detail').innerHTML='';
   renderDashboard();renderOrders();
+}
+
+function updateLineItem(orderId, idx, field, val){
+  const oidx=orders.findIndex(o=>String(o.id)===String(orderId));
+  if(oidx<0)return;
+  const item=orders[oidx].items?.[idx];
+  if(!item)return;
+  if(['qty','qtyShipped','unitPrice','total'].includes(field)){
+    item[field]=parseFloat(val)||0;
+    // recalc balance
+    item.qtyBalance=Math.max(0,(item.qty||0)-(item.qtyShipped||0));
+  } else {
+    item[field]=val;
+  }
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  showDetail(orderId);
+  renderOrders();
+  renderDashboard();
+}
+
+function addLineItem(orderId){
+  const oidx=orders.findIndex(o=>String(o.id)===String(orderId));
+  if(oidx<0)return;
+  if(!orders[oidx].items)orders[oidx].items=[];
+  const nextLine=String((orders[oidx].items.length||0)+1).padStart(3,'0');
+  orders[oidx].items.push({lineNo:nextLine,productNo:'',description:'',qty:0,unit:'Ea',unitPrice:0,total:0,qtyShipped:0,qtyBalance:0});
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  showDetail(orderId);
+}
+
+function deleteLineItem(orderId, idx){
+  if(!confirm('Delete this line item?'))return;
+  const oidx=orders.findIndex(o=>String(o.id)===String(orderId));
+  if(oidx<0)return;
+  orders[oidx].items.splice(idx,1);
+  localStorage.setItem('dewart_orders',JSON.stringify(orders));
+  saveToOneDrive();
+  showDetail(orderId);
+  renderOrders();
+  renderDashboard();
 }
 
 function updateCommissionPct(orderId, lineKey, val){
