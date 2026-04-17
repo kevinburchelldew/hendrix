@@ -411,8 +411,12 @@ async function handleOrderPDF(text,filename,status){
     if(extractedPO) break;
   }
   
-  // Find total from last occurrence of "TOTAL" followed by a number
-  const totalMatches = [...text.matchAll(/TOTAL\s+([\d,]+\.\d{2})/gi)];
+  // Find total — strip T&C section first, then find the final TOTAL (capitalized, standalone word)
+  let totalSearchText = text;
+  const tcIdx2 = text.search(/TERMS\s*&\s*CONDITIONS\s+OF\s+SALE/i);
+  if(tcIdx2 > 0) totalSearchText = text.slice(0, tcIdx2);
+  // Match "TOTAL" followed by whitespace then a number with 2 decimals — must be standalone TOTAL word
+  const totalMatches = [...totalSearchText.matchAll(/\bTOTAL\s+([\d,]+\.\d{2})\b/g)];
   const extractedTotal = totalMatches.length ? parseFloat(totalMatches[totalMatches.length-1][1].replace(/,/g,'')) : 0;
   
   // Strip the terms & conditions boilerplate — everything after the first "TERMS & CONDITIONS" heading
