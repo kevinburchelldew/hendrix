@@ -430,10 +430,13 @@ Required JSON shape:
 {
   "customerPONo": "the CUSTOMER P.O. NUMBER value (alphanumeric like 2825820-00 or 4506069188RLS)",
   "orderDate": "the P.O. DATE in MM/DD/YYYY format",
-  "customer": "company name from CUSTOMER section",
-  "customerCity": "city from ship-to address",
-  "customerState": "2-letter state abbreviation",
-  "shipToAddress": "full ship-to address",
+  "customer": "company name from CUSTOMER section (the billing customer)",
+  "customerCity": "city of the billing customer",
+  "customerState": "2-letter state abbreviation of billing customer",
+  "shipToName": "company name from SHIP TO section — may differ from CUSTOMER",
+  "shipToCity": "city from SHIP TO address",
+  "shipToState": "2-letter state abbreviation from SHIP TO address",
+  "shipToAddress": "full ship-to address as one string",
   "salesRep": "SALES REPRESENTATIVE value",
   "paymentTerms": "PAYMENT TERMS value",
   "scheduledShip": "SCHEDULED SHIP date in MM/DD/YYYY format from first line item",
@@ -638,7 +641,7 @@ function renderDashboard(){
   const stateCount={};
   const stateRevenue={};
   orders.forEach(o=>{
-    const st=o.customerState||'Unknown';
+    const st=o.shipToState||o.customerState||'Unknown';
     stateCount[st]=(stateCount[st]||0)+1;
     stateRevenue[st]=(stateRevenue[st]||0)+(o.orderTotal||0);
   });
@@ -744,7 +747,7 @@ function renderOrders(){
   });
   const el=document.getElementById('orders-list');
   if(!filtered.length){el.innerHTML='<div class="empty">'+(orders.length?'No matching orders':'No orders yet — use Import PDF to get started')+'</div>';return;}
-  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>City, State</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${filtered.map(o=>{
+  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>Ship to</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${filtered.map(o=>{
     const tOrd=o.items?.reduce((a,i)=>a+(i.qty||0),0)||0;
     const tShp=o.items?.reduce((a,i)=>a+(i.qtyShipped||0),0)||0;
     const tBal=o.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
@@ -753,7 +756,7 @@ function renderOrders(){
       <td style="font-family:monospace">${o.customerPONo||'—'}</td>
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
       <td>${o.customer||'—'}</td>
-      <td style="color:#888;white-space:nowrap">${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</td>
+      <td style="color:#888;white-space:nowrap">${(o.shipToCity||o.customerCity)&&(o.shipToState||o.customerState)?(o.shipToCity||o.customerCity)+', '+(o.shipToState||o.customerState):(o.shipToCity||o.customerCity||o.shipToState||o.customerState)||'—'}</td>
       <td style="color:#888">${o.items?.[0]?.productNo||'—'}</td>
       <td>${tOrd.toLocaleString()}</td>
       <td style="color:#2E7D32;font-weight:${tShp>0?600:400}">${tShp>0?tShp.toLocaleString():'—'}</td>
@@ -778,9 +781,11 @@ function showDetail(id){
       <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
     </div>
     <div class="detail-grid">
-      <div class="df"><label>Customer</label><span>${o.customer||'—'}</span></div>
-      <div class="df"><label>City, State</label><span>${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</span></div>
+      <div class="df"><label>Customer (bill to)</label><span>${o.customer||'—'}</span></div>
+      <div class="df"><label>Customer city, state</label><span>${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</span></div>
       <div class="df"><label>Customer PO #</label><span style="font-family:monospace">${o.customerPONo||'—'}</span></div>
+      <div class="df"><label>Ship to</label><span>${o.shipToName||o.customer||'—'}</span></div>
+      <div class="df"><label>Ship to city, state</label><span>${o.shipToCity&&o.shipToState?o.shipToCity+', '+o.shipToState:o.shipToCity||o.shipToState||'—'}</span></div>
       <div class="df"><label>Order date</label><span>${fmtDate(o.orderDate)}</span></div>
       <div class="df"><label>Scheduled ship</label><span>${fmtDate(o.scheduledShip)}</span></div>
       <div class="df"><label>Requested date</label><span>${fmtDate(o.requestedDate)}</span></div>
@@ -819,9 +824,12 @@ function showEditForm(id){
     <div class="detail-grid">
       <div class="df"><label>Sales order #</label><input id="e-sono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.salesOrderNo||''}"></div>
       <div class="df"><label>Customer PO #</label><input id="e-pono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerPONo||''}"></div>
-      <div class="df"><label>Customer name</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}">
-      <div class="df"><label>City</label><input id="e-city" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerCity||''}">
-      <div class="df"><label>State</label><input id="e-state" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.customerState||''}"></div>
+      <div class="df"><label>Customer name (bill to)</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}">
+      <div class="df"><label>Customer city</label><input id="e-city" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerCity||''}">
+      <div class="df"><label>Customer state</label><input id="e-state" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.customerState||''}">
+      <div class="df"><label>Ship to name</label><input id="e-shipto" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.shipToName||''}">
+      <div class="df"><label>Ship to city</label><input id="e-shipcity" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.shipToCity||''}">
+      <div class="df"><label>Ship to state</label><input id="e-shipstate" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.shipToState||''}"></div>
       <div class="df"><label>Scheduled ship (MM/DD/YYYY)</label><input id="e-ship" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.scheduledShip)}"></div>
       <div class="df"><label>Order date (MM/DD/YYYY)</label><input id="e-date" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.orderDate)}"></div>
       <div class="df"><label>Order total ($)</label><input id="e-total" type="number" step="0.01" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.orderTotal||0}"></div>
@@ -849,6 +857,9 @@ function saveEdit(id){
   o.customer=document.getElementById('e-cust').value.trim();
   o.customerCity=document.getElementById('e-city')?.value.trim()||o.customerCity||'';
   o.customerState=document.getElementById('e-state')?.value.trim().toUpperCase()||o.customerState||'';
+  o.shipToName=document.getElementById('e-shipto')?.value.trim()||o.shipToName||'';
+  o.shipToCity=document.getElementById('e-shipcity')?.value.trim()||o.shipToCity||'';
+  o.shipToState=document.getElementById('e-shipstate')?.value.trim().toUpperCase()||o.shipToState||'';
   o.scheduledShip=parseDate(document.getElementById('e-ship').value.trim())||document.getElementById('e-ship').value.trim();
   o.orderDate=parseDate(document.getElementById('e-date').value.trim())||document.getElementById('e-date').value.trim();
   o.orderTotal=parseFloat(document.getElementById('e-total').value)||0;
