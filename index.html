@@ -152,6 +152,8 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
         <div id="state-revenue"><div class="empty">No data yet</div></div>
       </div>
     </div>
+    <div style="margin-bottom:1rem;text-align:right"><button onclick="showDebugView()" style="padding:6px 14px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">🔍 Debug product totals</button></div>
+    <div id="debug-view"></div>
     <div class="dash-grid">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
@@ -917,6 +919,61 @@ function updateCommissionPct(orderId, lineKey, val){
       cells[9].style.color='#0F6E56';cells[9].style.fontWeight='600';
     }
   });
+}
+
+function showDebugView(){
+  const el=document.getElementById('debug-view');
+  if(el.innerHTML){el.innerHTML='';return;}
+  const byProduct={};
+  orders.forEach(o=>{
+    (o.items||[]).forEach(it=>{
+      const key=it.productNo||'Unknown';
+      if(!byProduct[key])byProduct[key]=[];
+      byProduct[key].push({
+        soNo:o.salesOrderNo,
+        customer:o.customer,
+        qty:it.qty||0,
+        qtyShipped:it.qtyShipped||0,
+        unitPrice:it.unitPrice||0,
+        total:it.total||0,
+        filename:o.filename
+      });
+    });
+  });
+  const sorted=Object.entries(byProduct).sort((a,b)=>b[1].reduce((s,i)=>s+i.qty,0)-a[1].reduce((s,i)=>s+i.qty,0));
+  el.innerHTML=`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div style="font-size:13px;font-weight:600">Debug: every line item per product</div>
+      <button onclick="document.getElementById('debug-view').innerHTML=''" style="padding:4px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:11px">Close</button>
+    </div>
+    ${sorted.map(([p,items])=>{
+      const totalQty=items.reduce((s,i)=>s+i.qty,0);
+      const totalDollars=items.reduce((s,i)=>s+i.total,0);
+      return`<div style="margin-bottom:16px;padding:10px;background:#f9f9f9;border-radius:8px">
+        <div style="font-family:monospace;font-weight:600;font-size:13px;margin-bottom:8px">${p}</div>
+        <div style="font-size:11px;color:#666;margin-bottom:6px">Total: ${totalQty.toLocaleString()} units from ${items.length} line items = ${fmt(totalDollars)}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr>
+            <th style="text-align:left;padding:4px 6px;font-size:10px;color:#888">SO#</th>
+            <th style="text-align:left;padding:4px 6px;font-size:10px;color:#888">Customer</th>
+            <th style="text-align:right;padding:4px 6px;font-size:10px;color:#888">Qty</th>
+            <th style="text-align:right;padding:4px 6px;font-size:10px;color:#888">Unit $</th>
+            <th style="text-align:right;padding:4px 6px;font-size:10px;color:#888">Line $</th>
+            <th style="text-align:left;padding:4px 6px;font-size:10px;color:#888">File</th>
+          </tr></thead>
+          <tbody>${items.map(i=>`<tr>
+            <td style="padding:4px 6px;font-family:monospace">${i.soNo||'—'}</td>
+            <td style="padding:4px 6px">${(i.customer||'—').slice(0,30)}</td>
+            <td style="padding:4px 6px;text-align:right">${i.qty.toLocaleString()}</td>
+            <td style="padding:4px 6px;text-align:right">${fmt(i.unitPrice)}</td>
+            <td style="padding:4px 6px;text-align:right;font-weight:600">${fmt(i.total)}</td>
+            <td style="padding:4px 6px;font-size:10px;color:#aaa">${(i.filename||'').slice(0,20)}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    }).join('')}
+  </div>`;
+  el.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 function setProductMode(mode){
