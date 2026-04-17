@@ -532,7 +532,18 @@ async function applyInvoiceToOrder(inv, idx, status){
   const order=orders[idx];
   (inv.items||[]).forEach(ii=>{
     const oi=order.items?.find(x=>x.lineNo===ii.lineNo||x.productNo===ii.productNo);
-    if(oi){oi.qtyShipped=(oi.qtyShipped||0)+ii.qtyShipped;oi.qtyBalance=ii.qtyBalance;}
+    if(oi){
+      oi.qtyShipped=(oi.qtyShipped||0)+(ii.qtyShipped||0);
+      // Calculate balance from ordered qty minus shipped qty
+      // (don't rely on invoice's balance field since it may be blank on partial shipments)
+      oi.qtyBalance=Math.max(0,(oi.qty||0)-(oi.qtyShipped||0));
+    }
+  });
+  // Also recalculate balance for any items not in this invoice
+  (order.items||[]).forEach(oi=>{
+    if(oi.qtyBalance===undefined||oi.qtyBalance===null){
+      oi.qtyBalance=Math.max(0,(oi.qty||0)-(oi.qtyShipped||0));
+    }
   });
   if(!order.shipments)order.shipments=[];
   order.shipments.push({invoiceNo:inv.invoiceNo,invoiceDate:inv.invoiceDate,actualShipDate:inv.actualShipDate,invoiceTotal:inv.invoiceTotal});
