@@ -856,7 +856,6 @@ function renderDashboard(){
     }
   }
   
-}
   const byC={};orders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
