@@ -348,7 +348,11 @@ async function loadFromOneDrive(){
     if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');renderDashboard();renderOrders();}
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
-    else{setSyncStatus('OneDrive error','err');console.error(e);}
+    else{
+      console.error('OneDrive load error:',e);
+      alert('OneDrive error details:\n\n'+e.message.slice(0,500));
+      setSyncStatus('OneDrive error: '+e.message.slice(0,40),'err');
+    }
   }
 }
 
@@ -672,22 +676,19 @@ function setTrendMonths(m){
 function renderDashboard(){
   renderYearFilter();
   const _allOrders=orders;
-  const _filteredOrders=getFilteredOrders();
-  // Use a local var to avoid reassigning the global `orders`
-  // We'll shadow it within this function scope
-  const orders=_filteredOrders;
-  const total=orders.reduce((a,o)=>a+(o.orderTotal||0),0);
-  const pending=orders.filter(o=>['pending','overdue'].includes(getStatus(o))).length;
-  const backorder=orders.filter(o=>['backorder','partial'].includes(getStatus(o))).length;
-  document.getElementById('m-orders').textContent=orders.length;
+  const dashOrders=getFilteredOrders();
+  const total=dashOrders.reduce((a,o)=>a+(o.orderTotal||0),0);
+  const pending=dashOrders.filter(o=>['pending','overdue'].includes(getStatus(o))).length;
+  const backorder=dashOrders.filter(o=>['backorder','partial'].includes(getStatus(o))).length;
+  document.getElementById('m-orders').textContent=dashOrders.length;
   document.getElementById('m-revenue').textContent=fmt(total);
   document.getElementById('m-pending').textContent=pending;
   document.getElementById('m-backorder').textContent=backorder;
-  const totalUnits=orders.reduce((a,o)=>a+((o.items||[]).reduce((s,i)=>s+(i.qtyShipped||0),0)),0);
+  const totalUnits=dashOrders.reduce((a,o)=>a+((o.items||[]).reduce((s,i)=>s+(i.qtyShipped||0),0)),0);
   document.getElementById('m-units').textContent=totalUnits.toLocaleString();
   
   // Total commission earned
-  const totalCommission=orders.reduce((sum,o)=>{
+  const totalCommission=dashOrders.reduce((sum,o)=>{
     return sum+((o.items||[]).reduce((s,i)=>{
       const rate=i.commissionPct??getCommission(i.productNo);
       if(rate==null)return s;
@@ -704,7 +705,7 @@ function renderDashboard(){
     const label=d.toLocaleDateString('en-US',{month:'short'})+(trendMonths>=12?" '"+String(d.getFullYear()).slice(2):'');
     const year=d.getFullYear();
     const monthStr=String(d.getMonth()+1).padStart(2,'0')+'/'+year;
-    const total=orders.filter(o=>{
+    const total=dashOrders.filter(o=>{
       const od=parseDate(o.orderDate);
       if(!od)return false;
       const od2=new Date(od+'T12:00:00');
@@ -734,7 +735,7 @@ function renderDashboard(){
   // Orders by state
   const stateCount={};
   const stateRevenue={};
-  orders.forEach(o=>{
+  dashOrders.forEach(o=>{
     const st=o.shipToState||o.customerState||'Unknown';
     stateCount[st]=(stateCount[st]||0)+1;
     stateRevenue[st]=(stateRevenue[st]||0)+(o.orderTotal||0);
@@ -765,7 +766,7 @@ function renderDashboard(){
   
   // Top products — track ordered $, shipped $, and units
   const productStats={};
-  orders.forEach(o=>{
+  dashOrders.forEach(o=>{
     (o.items||[]).forEach(it=>{
       const key=it.productNo||'Unknown';
       if(!productStats[key])productStats[key]={revenue:0,shippedRevenue:0,units:0,unitsShipped:0,description:it.description||''};
@@ -821,7 +822,7 @@ function renderDashboard(){
     </table>`:'<div class="empty">No data yet</div>';
   }
   
-  // Year-over-year comparison — always uses ALL orders (not filtered by year)
+  // Year-over-year comparison — always uses ALL dashOrders (not filtered by year)
   const yoyEl=document.getElementById('yoy-chart');
   if(yoyEl){
     const yearMonthData={};
@@ -856,12 +857,12 @@ function renderDashboard(){
     }
   }
   
-  const byC={};orders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
+  const byC={};dashOrders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
   document.getElementById('bar-chart').innerHTML=sorted.length?sorted.map(([n,v])=>`<div class="bar-row"><div class="bar-label" title="${n}">${n.length>13?n.slice(0,13)+'…':n}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/max*100)}%"></div></div><div class="bar-val">${fmt(v)}</div></div>`).join(''):'<div class="empty">No data yet</div>';
   const today=new Date();today.setHours(0,0,0,0);
-  const upcoming=orders.filter(o=>{const d=parseDate(o.scheduledShip);return d&&new Date(d+'T12:00:00')>=today&&getStatus(o)!=='shipped';}).sort((a,b)=>(parseDate(a.scheduledShip)||'')>(parseDate(b.scheduledShip)||'')?1:-1).slice(0,6);
+  const upcoming=dashOrders.filter(o=>{const d=parseDate(o.scheduledShip);return d&&new Date(d+'T12:00:00')>=today&&getStatus(o)!=='shipped';}).sort((a,b)=>(parseDate(a.scheduledShip)||'')>(parseDate(b.scheduledShip)||'')?1:-1).slice(0,6);
   document.getElementById('upcoming-list').innerHTML=upcoming.length?`<table><thead><tr><th>Ship date</th><th>Customer</th><th>SO #</th><th>Status</th></tr></thead><tbody>${upcoming.map(o=>`<tr><td>${fmtDate(o.scheduledShip)}</td><td style="font-size:12px">${o.customer||'—'}</td><td style="font-family:monospace;font-size:11px">${o.salesOrderNo||'—'}</td><td>${statusBadge(o)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No upcoming shipments</div>';
 }
 
