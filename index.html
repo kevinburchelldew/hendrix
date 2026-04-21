@@ -420,7 +420,7 @@ async function handleFile(input){
   const files=Array.from(input.files);
   if(!files.length)return;
   const status=document.getElementById('upload-status');
-  const results={success:[],failed:[]};
+  const results={success:[],failed:[],duplicates:[]};
   
   for(let i=0;i<files.length;i++){
     const file=files[i];
@@ -438,8 +438,12 @@ async function handleFile(input){
       else{await handleInvoicePDF(text,file.name,status,true);}
       results.success.push(file.name);
     }catch(e){
-      console.error('Failed to import '+file.name,e);
-      results.failed.push({name:file.name,error:e.message});
+      if(e.message&&e.message.startsWith('DUPLICATE:')){
+        results.duplicates.push({name:file.name,msg:e.message.replace(/^DUPLICATE:\s*/,'')});
+      } else {
+        console.error('Failed to import '+file.name,e);
+        results.failed.push({name:file.name,error:e.message});
+      }
     }
   }
   
@@ -447,6 +451,9 @@ async function handleFile(input){
   let summaryHtml='';
   if(results.success.length>0){
     summaryHtml+=`<div class="msg-ok">✓ Successfully imported ${results.success.length} file${results.success.length!==1?'s':''}</div>`;
+  }
+  if(results.duplicates.length>0){
+    summaryHtml+=`<div class="msg-warn" style="margin-top:8px">⚠ Skipped ${results.duplicates.length} duplicate${results.duplicates.length!==1?'s':''}: ${results.duplicates.map(d=>d.name+' — '+d.msg).join('; ')}</div>`;
   }
   if(results.failed.length>0){
     summaryHtml+=`<div class="msg-err" style="margin-top:8px">✗ Failed ${results.failed.length}: ${results.failed.map(f=>f.name+' ('+f.error.slice(0,50)+')').join(', ')}</div>`;
@@ -660,7 +667,7 @@ Document: ${text.slice(0,5000)}`);
     window._pendingInv = inv;
     return;
   }
-  applyInvoiceToOrder(inv, idx, status);
+  applyInvoiceToOrder(inv, idx, status, isBulk);
 }
 
 function matchInvoiceLine(invLine, orderItems){
@@ -684,8 +691,62 @@ function matchInvoiceLine(invLine, orderItems){
   return withBalance.sort((a,b)=>((b.qty||0)-(b.qtyShipped||0))-((a.qty||0)-(a.qtyShipped||0)))[0];
 }
 
-async function applyInvoiceToOrder(inv, idx, status){
+function findInvoiceDuplicate(invoiceNo){
+  if(!invoiceNo)return null;
+  const target=String(invoiceNo).trim();
+  if(!target)return null;
+  for(const o of orders){
+    const s=(o.shipments||[]).find(s=>s.invoiceNo&&String(s.invoiceNo).trim()===target);
+    if(s)return {order:o,shipment:s};
+  }
+  return null;
+}
+
+function confirmApplyDuplicate(){
+  const inv=window._pendingDupInv;
+  const idx=window._pendingDupIdx;
+  window._pendingDupInv=null;
+  window._pendingDupIdx=null;
+  if(inv==null||idx==null)return;
+  applyInvoiceToOrder(inv, idx, document.getElementById('upload-status'), false, true);
+}
+
+function skipDuplicateInvoice(){
+  window._pendingDupInv=null;
+  window._pendingDupIdx=null;
+  document.getElementById('upload-status').innerHTML='<div class="msg-ok">Duplicate invoice skipped. No changes made.</div>';
+}
+
+async function applyInvoiceToOrder(inv, idx, status, isBulk, skipDupCheck){
   const order=orders[idx];
+  // Duplicate-invoice guard: prevent double-counting a shipment if the same
+  // PDF (or another PDF reporting the same invoice#) is uploaded again.
+  if(!skipDupCheck&&inv.invoiceNo){
+    const dup=findInvoiceDuplicate(inv.invoiceNo);
+    if(dup){
+      const sameOrder=dup.order.salesOrderNo===order.salesOrderNo;
+      const dupDate=fmtDate(dup.shipment.actualShipDate||dup.shipment.invoiceDate);
+      const whereMsg=sameOrder
+        ?`already on this order (applied ${dupDate})`
+        :`already applied to SO ${dup.order.salesOrderNo} — ${getCanonicalCustomer(dup.order.customer)||'—'} (applied ${dupDate})`;
+      if(isBulk){
+        throw new Error('DUPLICATE: Invoice '+inv.invoiceNo+' '+whereMsg);
+      }
+      if(status){
+        status.innerHTML=`<div class="msg-warn">
+          <div style="font-weight:600;margin-bottom:6px">⚠ Duplicate invoice</div>
+          <div style="margin-bottom:10px">Invoice ${inv.invoiceNo} is ${whereMsg}. Applying it again will double-count the shipment.</div>
+          <div style="display:flex;gap:8px">
+            <button onclick="skipDuplicateInvoice()" style="padding:6px 14px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Skip this invoice</button>
+            <button onclick="confirmApplyDuplicate()" style="padding:6px 14px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:13px">Apply anyway</button>
+          </div>
+        </div>`;
+        window._pendingDupInv=inv;
+        window._pendingDupIdx=idx;
+      }
+      return;
+    }
+  }
   if(!order.items)order.items=[];
   const summary={matched:[],added:[]};
   (inv.items||[]).forEach(ii=>{
@@ -750,7 +811,7 @@ async function applyInvoiceToOrder(inv, idx, status){
   await saveToOneDrive();
   const balMsg=totalBalance>0?` — ${totalBalance.toLocaleString()} units on backorder`:'';
   const addedMsg=summary.added.length?`<div style="margin-top:6px;font-weight:500">⚠ ${summary.added.length} new line${summary.added.length!==1?'s':''} added (product shipped that wasn't on the original order): ${summary.added.map(a=>a.productNo+' ×'+a.qty.toLocaleString()).join(', ')}. Review in the order detail and edit if needed.</div>`:'';
-  if(status&&!arguments[3]){
+  if(status&&!isBulk){
     const cls=summary.added.length?'msg-warn':'msg-ok';
     status.innerHTML=`<div class="${cls}">✓ Invoice ${inv.invoiceNo} applied to SO ${order.salesOrderNo} — ${totalShipped.toLocaleString()} units shipped${balMsg}${addedMsg}</div>`;
   }
