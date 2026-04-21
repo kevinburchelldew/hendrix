@@ -566,7 +566,45 @@ ${cleanText.slice(0,6000)}`);
     if(rate!==null)i.commissionPct=rate;
   });
   const exists=orders.findIndex(o=>o.salesOrderNo===order.salesOrderNo);
-  if(exists>=0){orders[exists]=order;if(!isBulk)status.innerHTML=`<div class="msg-warn">⚠ SO ${order.salesOrderNo} already existed — updated with this version.</div>`;}
+  if(exists>=0){
+    // MERGE mode: preserve shipment history, shipped qtys, and commission overrides from
+    // the existing record. Marmon sometimes re-issues an ack with an added line or
+    // revised qtys — we don't want to wipe everything.
+    const existing=orders[exists];
+    const consumed=new Set();
+    const mergedItems=[];
+    (order.items||[]).forEach(newItem=>{
+      // Prefer exact match on lineNo+productNo, then productNo alone
+      let matchIdx=(existing.items||[]).findIndex((ex,i)=>!consumed.has(i)&&ex.lineNo===newItem.lineNo&&ex.productNo===newItem.productNo);
+      if(matchIdx<0)matchIdx=(existing.items||[]).findIndex((ex,i)=>!consumed.has(i)&&ex.productNo===newItem.productNo);
+      if(matchIdx>=0){
+        consumed.add(matchIdx);
+        const ex=existing.items[matchIdx];
+        mergedItems.push({
+          ...newItem,
+          qtyShipped:ex.qtyShipped||0,
+          qtyBalance:Math.max(0,(newItem.qty||0)-(ex.qtyShipped||0)),
+          commissionPct:ex.commissionPct!==undefined?ex.commissionPct:newItem.commissionPct
+        });
+      } else {
+        mergedItems.push(newItem);
+      }
+    });
+    // Keep any existing items that had shipments but aren't in the new PDF — don't lose data
+    (existing.items||[]).forEach((ex,i)=>{
+      if(!consumed.has(i)&&(ex.qtyShipped||0)>0)mergedItems.push({...ex,description:(ex.description||'')+' (not on re-issued ack)'});
+    });
+    // Rebuild the merged order
+    orders[exists]={...existing,...order,id:existing.id,filename:existing.filename,items:mergedItems,shipments:existing.shipments||[]};
+    // Recompute overall status from merged items
+    const ts=mergedItems.reduce((a,i)=>a+(i.qtyShipped||0),0);
+    const tb=mergedItems.reduce((a,i)=>a+(i.qtyBalance||0),0);
+    if(tb>0&&ts>0)orders[exists].status='partial';
+    else if(tb===0&&ts>0)orders[exists].status='shipped';
+    else if((existing.shipments||[]).length&&tb>0&&ts===0)orders[exists].status='backorder';
+    else orders[exists].status='pending';
+    if(!isBulk)status.innerHTML=`<div class="msg-warn">⚠ SO ${order.salesOrderNo} re-imported — shipment history and shipped qtys preserved. Added/changed lines are merged in.</div>`;
+  }
   else{orders.unshift(order);if(!isBulk)status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>`;}
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();renderDashboard();renderOrders();
@@ -625,15 +663,71 @@ Document: ${text.slice(0,5000)}`);
   applyInvoiceToOrder(inv, idx, status);
 }
 
+function matchInvoiceLine(invLine, orderItems){
+  if(!orderItems||!orderItems.length)return null;
+  // 1. Strong match: same lineNo AND same productNo
+  const exact=orderItems.find(x=>x.lineNo&&invLine.lineNo&&x.lineNo===invLine.lineNo&&x.productNo===invLine.productNo);
+  if(exact)return exact;
+  // 2. ProductNo match (lineNo may have shifted) — pick the best candidate by remaining balance
+  if(!invLine.productNo)return null;
+  const prodMatches=orderItems.filter(x=>x.productNo===invLine.productNo);
+  if(!prodMatches.length)return null;
+  const invQty=invLine.qtyShipped||0;
+  const withBalance=prodMatches.filter(x=>(x.qty||0)-(x.qtyShipped||0)>0);
+  // All candidate lines are already fully shipped → treat invoice line as NEW (Marmon added product)
+  if(!withBalance.length)return null;
+  if(withBalance.length===1)return withBalance[0];
+  // Multiple candidates — prefer a line whose remaining balance EXACTLY matches the shipment qty
+  const exactSize=withBalance.find(x=>((x.qty||0)-(x.qtyShipped||0))===invQty);
+  if(exactSize)return exactSize;
+  // Otherwise, pick the line with the most remaining balance
+  return withBalance.sort((a,b)=>((b.qty||0)-(b.qtyShipped||0))-((a.qty||0)-(a.qtyShipped||0)))[0];
+}
+
 async function applyInvoiceToOrder(inv, idx, status){
   const order=orders[idx];
+  if(!order.items)order.items=[];
+  const summary={matched:[],added:[]};
   (inv.items||[]).forEach(ii=>{
-    const oi=order.items?.find(x=>x.lineNo===ii.lineNo||x.productNo===ii.productNo);
+    const oi=matchInvoiceLine(ii, order.items);
     if(oi){
-      oi.qtyShipped=(oi.qtyShipped||0)+(ii.qtyShipped||0);
+      const qty=ii.qtyShipped||0;
+      oi.qtyShipped=(oi.qtyShipped||0)+qty;
       // Calculate balance from ordered qty minus shipped qty
-      // (don't rely on invoice's balance field since it may be blank on partial shipments)
       oi.qtyBalance=Math.max(0,(oi.qty||0)-(oi.qtyShipped||0));
+      summary.matched.push({invLine:ii.lineNo,productNo:ii.productNo,qty,orderLine:oi.lineNo});
+    } else if(ii.productNo){
+      // No line in the order can absorb this shipment — Marmon shipped product that wasn't on
+      // the original acknowledgement (or a line was added on their end). Add it as a new line.
+      const existingLineNos=new Set((order.items||[]).map(x=>x.lineNo));
+      let newLineNo=ii.lineNo;
+      if(!newLineNo||existingLineNos.has(newLineNo)){
+        // generate a unique 3-digit line# starting above current max
+        let n=order.items.length+1;
+        while(existingLineNos.has(String(n).padStart(3,'0')))n++;
+        newLineNo=String(n).padStart(3,'0');
+      }
+      const shipped=ii.qtyShipped||0;
+      const unitPrice=ii.unitPrice||0;
+      const lineTotal=ii.total||(shipped*unitPrice);
+      const newLine={
+        lineNo:newLineNo,
+        productNo:ii.productNo,
+        description:'(Added from invoice '+(inv.invoiceNo||'')+')',
+        qty:shipped,                 // assume the ordered qty matches what shipped
+        unit:ii.unit||'Ea',
+        unitPrice:unitPrice,
+        total:lineTotal,
+        qtyShipped:shipped,
+        qtyBalance:0,
+        addedFromInvoice:inv.invoiceNo||true
+      };
+      const rate=getCommission(newLine.productNo);
+      if(rate!==null)newLine.commissionPct=rate;
+      order.items.push(newLine);
+      // Also bump the order total so the added product is reflected
+      order.orderTotal=(order.orderTotal||0)+lineTotal;
+      summary.added.push({lineNo:newLine.lineNo,productNo:newLine.productNo,qty:shipped,total:lineTotal});
     }
   });
   // Also recalculate balance for any items not in this invoice
@@ -643,7 +737,7 @@ async function applyInvoiceToOrder(inv, idx, status){
     }
   });
   if(!order.shipments)order.shipments=[];
-  order.shipments.push({invoiceNo:inv.invoiceNo,invoiceDate:inv.invoiceDate,actualShipDate:inv.actualShipDate,invoiceTotal:inv.invoiceTotal});
+  order.shipments.push({invoiceNo:inv.invoiceNo,invoiceDate:inv.invoiceDate,actualShipDate:inv.actualShipDate,invoiceTotal:inv.invoiceTotal,summary});
   const totalShipped=order.items?.reduce((a,i)=>a+(i.qtyShipped||0),0)||0;
   const totalBalance=order.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
   if(totalBalance>0&&totalShipped>0)order.status='partial';
@@ -655,7 +749,11 @@ async function applyInvoiceToOrder(inv, idx, status){
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();
   const balMsg=totalBalance>0?` — ${totalBalance.toLocaleString()} units on backorder`:'';
-  if(status&&!arguments[3])status.innerHTML=`<div class="msg-ok">✓ Invoice ${inv.invoiceNo} applied to SO ${order.salesOrderNo} — ${totalShipped.toLocaleString()} units shipped${balMsg}</div>`;
+  const addedMsg=summary.added.length?`<div style="margin-top:6px;font-weight:500">⚠ ${summary.added.length} new line${summary.added.length!==1?'s':''} added (product shipped that wasn't on the original order): ${summary.added.map(a=>a.productNo+' ×'+a.qty.toLocaleString()).join(', ')}. Review in the order detail and edit if needed.</div>`:'';
+  if(status&&!arguments[3]){
+    const cls=summary.added.length?'msg-warn':'msg-ok';
+    status.innerHTML=`<div class="${cls}">✓ Invoice ${inv.invoiceNo} applied to SO ${order.salesOrderNo} — ${totalShipped.toLocaleString()} units shipped${balMsg}${addedMsg}</div>`;
+  }
   renderDashboard();renderOrders();
 }
 
@@ -988,8 +1086,8 @@ function showDetail(id){
       <button onclick="addLineItem('${o.id}')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:11px;font-weight:500">+ Add line</button>
     </div>
     <table class="items-tbl"><thead><tr><th>Line</th><th>Product #</th><th>Description</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Unit $</th><th>Total</th><th>Comm %</th><th>Comm $</th><th></th></tr></thead>
-    <tbody>${(o.items||[]).map((it,idx)=>`<tr>
-      <td><input type="text" value="${it.lineNo||''}" style="width:45px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent" onchange="updateLineItem('${o.id}',${idx},'lineNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+    <tbody>${(o.items||[]).map((it,idx)=>`<tr${it.addedFromInvoice?' style="background:#FFF9E6"':''}>
+      <td><input type="text" value="${it.lineNo||''}" style="width:45px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent" onchange="updateLineItem('${o.id}',${idx},'lineNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'">${it.addedFromInvoice?`<div style="font-size:9px;color:#E65100;font-weight:600;margin-top:2px" title="Added from invoice ${it.addedFromInvoice}">+ INV</div>`:''}</td>
       <td><input type="text" value="${it.productNo||''}" style="width:100px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;font-family:monospace;background:transparent" onchange="updateLineItem('${o.id}',${idx},'productNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
       <td><input type="text" value="${(it.description||'').replace(/"/g,'&quot;')}" style="width:100%;min-width:140px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;color:#888;background:transparent" onchange="updateLineItem('${o.id}',${idx},'description',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
       <td><input type="number" value="${it.qty||0}" style="width:60px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right" onchange="updateLineItem('${o.id}',${idx},'qty',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
@@ -1004,7 +1102,7 @@ function showDetail(id){
     <div style="text-align:right;font-size:13px;padding-top:10px;margin-top:8px;border-top:1px solid #f0f0f0">
       Ordered: <strong>${tOrd.toLocaleString()}</strong> &nbsp;|&nbsp; Shipped: <strong style="color:#2E7D32">${tShp.toLocaleString()}</strong> &nbsp;|&nbsp; Balance: <strong style="color:#4527A0">${tBal.toLocaleString()}</strong> &nbsp;|&nbsp; Order total: <strong>${fmt(o.orderTotal)}</strong>
     </div>
-    ${(o.shipments||[]).length?`<div class="ship-events"><div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Shipment history</div>${o.shipments.map(s=>`<div class="ship-event"><div class="ship-event-icon">✓</div><div><div style="font-weight:600">Invoice ${s.invoiceNo} — ${fmt(s.invoiceTotal)}</div><div style="color:#888;margin-top:2px">Shipped ${fmtDate(s.actualShipDate)} &nbsp;·&nbsp; Invoiced ${fmtDate(s.invoiceDate)}</div></div></div>`).join('')}</div>`:''}
+    ${(o.shipments||[]).length?`<div class="ship-events"><div style="font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Shipment history</div>${o.shipments.map(s=>`<div class="ship-event"><div class="ship-event-icon">✓</div><div><div style="font-weight:600">Invoice ${s.invoiceNo} — ${fmt(s.invoiceTotal)}</div><div style="color:#888;margin-top:2px">Shipped ${fmtDate(s.actualShipDate)} &nbsp;·&nbsp; Invoiced ${fmtDate(s.invoiceDate)}</div>${s.summary&&s.summary.added&&s.summary.added.length?`<div style="color:#E65100;margin-top:4px;font-size:11px">⚠ Added ${s.summary.added.length} new line${s.summary.added.length!==1?'s':''}: ${s.summary.added.map(a=>a.productNo+' ×'+a.qty).join(', ')}</div>`:''}</div></div>`).join('')}</div>`:''}
   </div>`;
   document.getElementById('order-detail').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
@@ -1124,16 +1222,8 @@ function updateCommissionPct(orderId, lineKey, val){
   item.commissionPct=val===''?null:parseFloat(val);
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   saveToOneDrive();
-  // refresh just the commission $ cell
-  const rows=document.querySelectorAll('.items-tbl tbody tr');
-  rows.forEach(row=>{
-    const cells=row.querySelectorAll('td');
-    if(cells.length>=10){
-      const commPct=item.commissionPct;
-      cells[9].textContent=commPct!=null?('$'+((item.total||0)*(commPct/100)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})):'—';
-      cells[9].style.color='#0F6E56';cells[9].style.fontWeight='600';
-    }
-  });
+  showDetail(orderId);
+  renderDashboard();
 }
 
 function showDebugView(){
