@@ -115,6 +115,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
     <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab" onclick="switchTab('orders')">Orders</button>
     <button class="tab" onclick="switchTab('upload')">Import PDF</button>
+    <button class="tab" onclick="switchTab('customers')">Customers</button>
     <button class="tab" onclick="switchTab('commission')">Commission Rates</button>
   </div>
 
@@ -217,6 +218,15 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
     </div>
   </div>
 
+  <!-- CUSTOMERS -->
+  <div id="tab-customers" class="section">
+    <div class="card">
+      <div class="card-title">Consolidate duplicate customer names</div>
+      <div style="font-size:13px;color:#666;margin-bottom:1rem;line-height:1.6">Marmon sometimes uses different spellings for the same customer (e.g. "PG&amp;E" vs "Pacific Gas &amp; Electric Co."). Set a <strong>canonical name</strong> on each variant below and the dashboard will consolidate them. Leave blank to keep the name as-is. Original names are preserved on each order — only grouping is affected.</div>
+      <div id="customers-list"></div>
+    </div>
+  </div>
+
   <!-- COMMISSION -->
   <div id="tab-commission" class="section">
     <div class="card">
@@ -274,6 +284,7 @@ let orders=[];
 let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
 let commissionRates=JSON.parse(localStorage.getItem('dewart_commission_rates')||'{}');
+let customerAliases=JSON.parse(localStorage.getItem('dewart_customer_aliases')||'{}');
 let activeFilter='all';
 let productMode='revenue';
 let selectedYear='all';
@@ -346,6 +357,8 @@ async function loadFromOneDrive(){
     setSyncStatus('Loading from OneDrive...','');
     const data=await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content');
     if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');renderDashboard();renderOrders();}
+    await loadAliasesFromOneDrive();
+    await loadCommissionRatesFromOneDrive();
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
     else{
@@ -363,6 +376,44 @@ async function saveToOneDrive(){
     await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(orders)});
     setSyncStatus('Saved to OneDrive','ok');
   }catch(e){setSyncStatus('Save failed','err');console.error(e);}
+}
+
+async function saveAliasesToOneDrive(){
+  if(!accessToken)return;
+  try{
+    await graphFetch('/me/drive/root:/Sales Tracker/customer-aliases.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerAliases)});
+  }catch(e){console.error('Failed to save aliases to OneDrive:',e);}
+}
+
+async function loadAliasesFromOneDrive(){
+  try{
+    const data=await graphFetch('/me/drive/root:/Sales Tracker/customer-aliases.json:/content');
+    if(data&&typeof data==='object'){
+      customerAliases=data;
+      localStorage.setItem('dewart_customer_aliases',JSON.stringify(customerAliases));
+    }
+  }catch(e){
+    if(!e.message.includes('itemNotFound'))console.error('Failed to load aliases from OneDrive:',e);
+  }
+}
+
+async function saveCommissionRatesToOneDrive(){
+  if(!accessToken)return;
+  try{
+    await graphFetch('/me/drive/root:/Sales Tracker/commission-rates.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(commissionRates)});
+  }catch(e){console.error('Failed to save commission rates to OneDrive:',e);}
+}
+
+async function loadCommissionRatesFromOneDrive(){
+  try{
+    const data=await graphFetch('/me/drive/root:/Sales Tracker/commission-rates.json:/content');
+    if(data&&typeof data==='object'){
+      commissionRates=data;
+      localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+    }
+  }catch(e){
+    if(!e.message.includes('itemNotFound'))console.error('Failed to load commission rates from OneDrive:',e);
+  }
 }
 
 async function handleFile(input){
@@ -857,20 +908,20 @@ function renderDashboard(){
     }
   }
   
-  const byC={};dashOrders.forEach(o=>{byC[o.customer]=(byC[o.customer]||0)+(o.orderTotal||0);});
+  const byC={};dashOrders.forEach(o=>{const cn=getCanonicalCustomer(o.customer)||'—';byC[cn]=(byC[cn]||0)+(o.orderTotal||0);});
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
   document.getElementById('bar-chart').innerHTML=sorted.length?sorted.map(([n,v])=>`<div class="bar-row"><div class="bar-label" title="${n}">${n.length>13?n.slice(0,13)+'…':n}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/max*100)}%"></div></div><div class="bar-val">${fmt(v)}</div></div>`).join(''):'<div class="empty">No data yet</div>';
   const today=new Date();today.setHours(0,0,0,0);
   const upcoming=dashOrders.filter(o=>{const d=parseDate(o.scheduledShip);return d&&new Date(d+'T12:00:00')>=today&&getStatus(o)!=='shipped';}).sort((a,b)=>(parseDate(a.scheduledShip)||'')>(parseDate(b.scheduledShip)||'')?1:-1).slice(0,6);
-  document.getElementById('upcoming-list').innerHTML=upcoming.length?`<table><thead><tr><th>Ship date</th><th>Customer</th><th>SO #</th><th>Status</th></tr></thead><tbody>${upcoming.map(o=>`<tr><td>${fmtDate(o.scheduledShip)}</td><td style="font-size:12px">${o.customer||'—'}</td><td style="font-family:monospace;font-size:11px">${o.salesOrderNo||'—'}</td><td>${statusBadge(o)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No upcoming shipments</div>';
+  document.getElementById('upcoming-list').innerHTML=upcoming.length?`<table><thead><tr><th>Ship date</th><th>Customer</th><th>SO #</th><th>Status</th></tr></thead><tbody>${upcoming.map(o=>`<tr><td>${fmtDate(o.scheduledShip)}</td><td style="font-size:12px">${getCanonicalCustomer(o.customer)||'—'}</td><td style="font-family:monospace;font-size:11px">${o.salesOrderNo||'—'}</td><td>${statusBadge(o)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No upcoming shipments</div>';
 }
 
 function renderOrders(){
   const q=(document.getElementById('search-input')?.value||'').toLowerCase();
   const sort=document.getElementById('sort-select')?.value||'date-desc';
   let filtered=orders.filter(o=>{
-    const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
+    const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||getCanonicalCustomer(o.customer||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
     const matchF=activeFilter==='all'||getStatus(o)===activeFilter;
     return matchQ&&matchF;
   });
@@ -893,7 +944,7 @@ function renderOrders(){
       <td style="font-family:monospace;font-weight:600">${o.salesOrderNo||'—'}</td>
       <td style="font-family:monospace">${o.customerPONo||'—'}</td>
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
-      <td>${o.customer||'—'}</td>
+      <td>${o.customer?(function(){const cn=getCanonicalCustomer(o.customer);return cn!==o.customer?`<span title="On PDF: ${o.customer.replace(/"/g,'&quot;')}">${cn}</span>`:cn;})():'—'}</td>
       <td style="color:#888;white-space:nowrap">${(o.shipToCity||o.customerCity)&&(o.shipToState||o.customerState)?(o.shipToCity||o.customerCity)+', '+(o.shipToState||o.customerState):(o.shipToCity||o.customerCity||o.shipToState||o.customerState)||'—'}</td>
       <td style="color:#888;font-size:11px">${(o.items||[]).length===0?'—':(o.items.length===1?o.items[0].productNo||'—':o.items.map(i=>i.productNo).filter(Boolean).slice(0,3).join(', ')+(o.items.length>3?` +${o.items.length-3}`:''))}</td>
       <td>${tOrd.toLocaleString()}</td>
@@ -919,7 +970,7 @@ function showDetail(id){
       <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
     </div>
     <div class="detail-grid">
-      <div class="df"><label>Customer (bill to)</label><span>${o.customer||'—'}</span></div>
+      <div class="df"><label>Customer (bill to)</label><span>${getCanonicalCustomer(o.customer)||'—'}${o.customer&&getCanonicalCustomer(o.customer)!==o.customer?`<span style="display:block;font-size:11px;color:#888;font-weight:400;margin-top:2px">On PDF: ${o.customer}</span>`:''}</span></div>
       <div class="df"><label>Customer city, state</label><span>${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</span></div>
       <div class="df"><label>Customer PO #</label><span style="font-family:monospace">${o.customerPONo||'—'}</span></div>
       <div class="df"><label>Ship to</label><span>${o.shipToName||o.customer||'—'}</span></div>
@@ -1156,6 +1207,7 @@ function addCommissionRate(){
   if(isNaN(rate)||rate<0||rate>100){alert('Please enter a valid rate between 0 and 100.');return;}
   commissionRates[product]=rate;
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  saveCommissionRatesToOneDrive();
   document.getElementById('cr-product').value='';
   document.getElementById('cr-rate').value='';
   renderCommissionRates();
@@ -1164,6 +1216,7 @@ function addCommissionRate(){
 function deleteCommissionRate(product){
   delete commissionRates[product];
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  saveCommissionRatesToOneDrive();
   renderCommissionRates();
 }
 
@@ -1221,6 +1274,7 @@ function setRateInline(product,val){
   else if(rate>=0&&rate<=100){commissionRates[product]=rate;}
   else{alert('Rate must be between 0 and 100');renderCommissionRates();return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  saveCommissionRatesToOneDrive();
   // Update all existing orders with this product's new rate
   orders.forEach(o=>{
     (o.items||[]).forEach(i=>{
@@ -1235,17 +1289,110 @@ function setRateInline(product,val){
   renderDashboard();
 }
 
+function getCanonicalCustomer(name){
+  if(!name)return name;
+  const key=name.trim().toUpperCase();
+  return customerAliases[key]||name;
+}
+
+function setAliasInline(originalName,val){
+  const key=originalName.trim().toUpperCase();
+  const trimmed=(val||'').trim();
+  if(!trimmed){delete customerAliases[key];}
+  else{customerAliases[key]=trimmed;}
+  localStorage.setItem('dewart_customer_aliases',JSON.stringify(customerAliases));
+  saveAliasesToOneDrive();
+  renderCustomers();
+  renderDashboard();
+  renderOrders();
+}
+
+function clearAlias(originalName){
+  const key=originalName.trim().toUpperCase();
+  delete customerAliases[key];
+  localStorage.setItem('dewart_customer_aliases',JSON.stringify(customerAliases));
+  saveAliasesToOneDrive();
+  renderCustomers();
+  renderDashboard();
+  renderOrders();
+}
+
+function renderCustomers(){
+  const el=document.getElementById('customers-list');
+  if(!el)return;
+  // Collect all unique customer names from orders
+  const stats={};
+  orders.forEach(o=>{
+    const name=o.customer;
+    if(!name)return;
+    if(!stats[name])stats[name]={orderCount:0,revenue:0};
+    stats[name].orderCount++;
+    stats[name].revenue+=(o.orderTotal||0);
+  });
+  // Include any names that have aliases set but no current orders
+  Object.keys(customerAliases).forEach(upperKey=>{
+    // find if any existing name maps to this key
+    const match=Object.keys(stats).find(n=>n.trim().toUpperCase()===upperKey);
+    if(!match)stats[upperKey]={orderCount:0,revenue:0,isOrphan:true};
+  });
+  const entries=Object.entries(stats).sort((a,b)=>b[1].revenue-a[1].revenue);
+  if(!entries.length){el.innerHTML='<div class="empty">No customers yet — import some orders to see customers here</div>';return;}
+  // Preview: show which canonical names currently consolidate 2+ variants
+  const grouped={};
+  entries.forEach(([name,s])=>{
+    if(s.isOrphan)return;
+    const canonical=getCanonicalCustomer(name);
+    if(!grouped[canonical])grouped[canonical]={variants:[],orderCount:0,revenue:0};
+    if(!grouped[canonical].variants.includes(name))grouped[canonical].variants.push(name);
+    grouped[canonical].orderCount+=s.orderCount;
+    grouped[canonical].revenue+=s.revenue;
+  });
+  const consolidated=Object.entries(grouped).filter(([c,g])=>g.variants.length>1);
+  let html='';
+  if(consolidated.length){
+    html+=`<div style="background:#E8F5E9;border-radius:8px;padding:12px 14px;margin-bottom:1rem;font-size:12px;line-height:1.7">
+      <div style="font-weight:600;color:#2E7D32;margin-bottom:4px">✓ ${consolidated.length} customer${consolidated.length!==1?'s':''} currently consolidated</div>
+      ${consolidated.map(([c,g])=>`<div><strong>${c}</strong> — ${g.orderCount} orders, ${fmt(g.revenue)} — combining: ${g.variants.filter(v=>v!==c).map(v=>'"'+v+'"').join(', ')}</div>`).join('')}
+    </div>`;
+  }
+  html+=`<table><thead><tr>
+    <th>Customer name (from PDF)</th>
+    <th>Orders</th>
+    <th>Revenue</th>
+    <th>Canonical name (blank = use as-is)</th>
+    <th></th>
+  </tr></thead>
+  <tbody>${entries.map(([name,s])=>{
+    const key=name.trim().toUpperCase();
+    const currentAlias=customerAliases[key]||'';
+    const safeName=name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<tr${s.isOrphan?' style="opacity:.5"':''}>
+      <td style="font-weight:500">${name}${s.isOrphan?' <span style="font-size:10px;color:#aaa">(no orders)</span>':''}</td>
+      <td style="color:#888">${s.orderCount||'—'}</td>
+      <td style="font-weight:600">${s.revenue>0?fmt(s.revenue):'—'}</td>
+      <td>
+        <input type="text" value="${currentAlias.replace(/"/g,'&quot;')}" placeholder="—" 
+          style="width:100%;min-width:220px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px"
+          onchange="setAliasInline('${safeName}',this.value)">
+      </td>
+      <td>${currentAlias?`<button onclick="clearAlias('${safeName}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Clear</button>`:''}</td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+  el.innerHTML=html;
+}
+
 function getCommission(productNo){
   if(!productNo)return null;
   return commissionRates[productNo.toUpperCase()]??null;
 }
 
 function switchTab(t){
-  document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['dashboard','orders','upload','commission'][i]===t));
+  document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['dashboard','orders','upload','customers','commission'][i]===t));
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+t).classList.add('active');
   if(t==='dashboard')renderDashboard();
   if(t==='orders')renderOrders();
+  if(t==='customers')renderCustomers();
   if(t==='commission')renderCommissionRates();
 }
 
