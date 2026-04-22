@@ -542,6 +542,18 @@ async function handleInvoicePDF(text,filename,status,isBulk){
   const invMatch = filename.match(/(\d{5,12})/);
   const extractedInv = invMatch ? invMatch[1] : '';
 
+  // Pre-flight duplicate check: if the filename-extracted invoice # is already
+  // on any order's shipment history, skip the AI call and warn.
+  if(extractedInv){
+    const dupOrder=orders.find(o=>(o.shipments||[]).some(s=>s.invoiceNo===extractedInv));
+    if(dupOrder){
+      const msg=`Invoice ${extractedInv} was already applied to SO ${dupOrder.salesOrderNo} — skipping duplicate upload.`;
+      if(isBulk){throw new Error('DUPLICATE: '+msg);}
+      status.innerHTML=`<div class="msg-warn">⚠ ${msg}</div>`;
+      return;
+    }
+  }
+
   const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY raw JSON, no markdown:
 {
   "salesOrderNo": "${extractedSO || 'the number after OUR ORDER: label'}",
@@ -579,6 +591,26 @@ Document: ${text.slice(0,5000)}`);
 
 async function applyInvoiceToOrder(inv, idx, status){
   const order=orders[idx];
+  // Duplicate guard: if this invoice # already exists on this order's shipment
+  // history, refresh the metadata on the existing record but DO NOT re-apply
+  // qtyShipped (it was already counted on the first upload).
+  if(inv.invoiceNo && order.shipments){
+    const dupIdx=order.shipments.findIndex(s=>s.invoiceNo===inv.invoiceNo);
+    if(dupIdx>=0){
+      order.shipments[dupIdx]={
+        invoiceNo:inv.invoiceNo,
+        invoiceDate:inv.invoiceDate||order.shipments[dupIdx].invoiceDate,
+        actualShipDate:inv.actualShipDate||order.shipments[dupIdx].actualShipDate,
+        invoiceTotal:inv.invoiceTotal||order.shipments[dupIdx].invoiceTotal
+      };
+      orders[idx]=order;
+      localStorage.setItem('dewart_orders',JSON.stringify(orders));
+      await saveToOneDrive();
+      if(status&&!arguments[3])status.innerHTML=`<div class="msg-warn">⚠ Invoice ${inv.invoiceNo} already applied to SO ${order.salesOrderNo} — metadata refreshed, quantities unchanged.</div>`;
+      renderDashboard();renderOrders();
+      return;
+    }
+  }
   (inv.items||[]).forEach(ii=>{
     const oi=order.items?.find(x=>x.lineNo===ii.lineNo||x.productNo===ii.productNo);
     if(oi){
@@ -623,9 +655,9 @@ function findDuplicateInvoices(){
     });
     const dupes=[...counts.entries()].filter(([,c])=>c>1);
     if(dupes.length){
-      // Determine if this order can be safely auto-corrected:
-      // only if EVERY invoice # on this order is duplicated the same number of times.
-      // That indicates "same PDF uploaded N times" with no other invoices mixed in.
+      // Auto-correction is only safe if EVERY invoice # on this order is
+      // duplicated the same number of times (i.e. same PDF re-uploaded N times,
+      // no other invoices mixed in).
       const uniqueCounts=[...new Set([...counts.values()])];
       const safeFactor=(uniqueCounts.length===1&&uniqueCounts[0]>1)?uniqueCounts[0]:null;
       report.push({orderIdx:idx,order:o,dupes,safeFactor});
