@@ -224,9 +224,13 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
   <!-- COMMISSION -->
   <!-- CUSTOMERS -->
   <div id="tab-customers" class="section">
+    <div class="card" id="duplicate-review-card">
+      <div class="card-title">Review duplicate customers</div>
+      <div id="duplicate-review"></div>
+    </div>
     <div class="card">
-      <div class="card-title">Consolidate duplicate customer names</div>
-      <div style="font-size:13px;color:#666;margin-bottom:1rem;line-height:1.6">Marmon sometimes uses different spellings for the same customer (e.g. "PG&amp;E" vs "Pacific Gas &amp; Electric Co."). Set a <strong>canonical name</strong> on each variant below and the dashboard will consolidate them. Leave blank to keep the name as-is. Original names are preserved on each order — only grouping is affected.</div>
+      <div class="card-title">All customers by location</div>
+      <div style="font-size:13px;color:#666;margin-bottom:1rem;line-height:1.6">Customers are grouped by <strong>name + city + state</strong>, so "ABC Electric Co." and "ABC Electric Company" at the same location are treated as one customer. The same name in different cities shows up as separate branches. Use the review panel above to merge misspellings or flag branches.</div>
       <div id="customers-list"></div>
     </div>
   </div>
@@ -289,6 +293,7 @@ let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
 let commissionRates=JSON.parse(localStorage.getItem('dewart_commission_rates')||'{}');
 let customerAliases=JSON.parse(localStorage.getItem('dewart_customer_aliases')||'{}');
+let customerNotDuplicates=JSON.parse(localStorage.getItem('dewart_customer_not_duplicates')||'{}');
 let activeFilter='all';
 let productMode='revenue';
 let selectedYear='all';
@@ -362,6 +367,7 @@ async function loadFromOneDrive(){
     const data=await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content');
     if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');renderDashboard();renderOrders();}
     await loadAliasesFromOneDrive();
+    await loadNotDuplicatesFromOneDrive();
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
     else{
@@ -386,6 +392,25 @@ async function saveAliasesToOneDrive(){
   try{
     await graphFetch('/me/drive/root:/Sales Tracker/customer-aliases.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerAliases)});
   }catch(e){console.error('Failed to save aliases to OneDrive:',e);}
+}
+
+async function saveNotDuplicatesToOneDrive(){
+  if(!accessToken)return;
+  try{
+    await graphFetch('/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerNotDuplicates)});
+  }catch(e){console.error('Failed to save not-duplicates to OneDrive:',e);}
+}
+
+async function loadNotDuplicatesFromOneDrive(){
+  try{
+    const data=await graphFetch('/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content');
+    if(data&&typeof data==='object'){
+      customerNotDuplicates=data;
+      localStorage.setItem('dewart_customer_not_duplicates',JSON.stringify(customerNotDuplicates));
+    }
+  }catch(e){
+    if(!e.message.includes('itemNotFound'))console.error('Failed to load not-duplicates from OneDrive:',e);
+  }
 }
 
 async function loadAliasesFromOneDrive(){
@@ -1005,20 +1030,36 @@ function renderDashboard(){
     }
   }
   
-  const byC={};dashOrders.forEach(o=>{const cn=getCanonicalCustomer(o.customer)||'—';byC[cn]=(byC[cn]||0)+(o.orderTotal||0);});
+  const byC={};
+  const byCMeta={};
+  dashOrders.forEach(o=>{
+    if(!o.customer){
+      byC['—']=(byC['—']||0)+(o.orderTotal||0);
+      return;
+    }
+    const k=orderCustomerKey(o);
+    if(!byC[k]){byC[k]=0;byCMeta[k]={name:getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState),city:o.customerCity||o.shipToCity||'',state:o.customerState||o.shipToState||''};}
+    byC[k]+=(o.orderTotal||0);
+  });
   const sorted=Object.entries(byC).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max=sorted[0]?.[1]||1;
-  document.getElementById('bar-chart').innerHTML=sorted.length?sorted.map(([n,v])=>`<div class="bar-row"><div class="bar-label" title="${n}">${n.length>13?n.slice(0,13)+'…':n}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/max*100)}%"></div></div><div class="bar-val">${fmt(v)}</div></div>`).join(''):'<div class="empty">No data yet</div>';
+  document.getElementById('bar-chart').innerHTML=sorted.length?sorted.map(([k,v])=>{
+    const meta=byCMeta[k]||{name:k};
+    const label=meta.name||'—';
+    const loc=meta.state?' ('+meta.state+')':'';
+    const fullLabel=label+loc;
+    return `<div class="bar-row"><div class="bar-label" title="${fullLabel.replace(/"/g,'&quot;')}">${fullLabel.length>16?fullLabel.slice(0,16)+'…':fullLabel}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/max*100)}%"></div></div><div class="bar-val">${fmt(v)}</div></div>`;
+  }).join(''):'<div class="empty">No data yet</div>';
   const today=new Date();today.setHours(0,0,0,0);
   const upcoming=dashOrders.filter(o=>{const d=parseDate(o.scheduledShip);return d&&new Date(d+'T12:00:00')>=today&&getStatus(o)!=='shipped';}).sort((a,b)=>(parseDate(a.scheduledShip)||'')>(parseDate(b.scheduledShip)||'')?1:-1).slice(0,6);
-  document.getElementById('upcoming-list').innerHTML=upcoming.length?`<table><thead><tr><th>Ship date</th><th>Customer</th><th>SO #</th><th>Status</th></tr></thead><tbody>${upcoming.map(o=>`<tr><td>${fmtDate(o.scheduledShip)}</td><td style="font-size:12px">${getCanonicalCustomer(o.customer)||'—'}</td><td style="font-family:monospace;font-size:11px">${o.salesOrderNo||'—'}</td><td>${statusBadge(o)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No upcoming shipments</div>';
+  document.getElementById('upcoming-list').innerHTML=upcoming.length?`<table><thead><tr><th>Ship date</th><th>Customer</th><th>SO #</th><th>Status</th></tr></thead><tbody>${upcoming.map(o=>`<tr><td>${fmtDate(o.scheduledShip)}</td><td style="font-size:12px">${getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'—'}</td><td style="font-family:monospace;font-size:11px">${o.salesOrderNo||'—'}</td><td>${statusBadge(o)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No upcoming shipments</div>';
 }
 
 function renderOrders(){
   const q=(document.getElementById('search-input')?.value||'').toLowerCase();
   const sort=document.getElementById('sort-select')?.value||'date-desc';
   let filtered=orders.filter(o=>{
-    const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(getCanonicalCustomer(o.customer)||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
+    const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'').toLowerCase().includes(q)||(o.customerCity||'').toLowerCase().includes(q)||(o.customerState||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
     const matchF=activeFilter==='all'||getStatus(o)===activeFilter;
     return matchQ&&matchF;
   });
@@ -1041,7 +1082,7 @@ function renderOrders(){
       <td style="font-family:monospace;font-weight:600">${o.salesOrderNo||'—'}</td>
       <td style="font-family:monospace">${o.customerPONo||'—'}</td>
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
-      <td>${o.customer?(function(){const cn=getCanonicalCustomer(o.customer);return cn!==o.customer?`<span title="On PDF: ${o.customer.replace(/"/g,'&quot;')}">${cn}</span>`:cn;})():'—'}</td>
+      <td>${o.customer?(function(){const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState);return cn!==o.customer?`<span title="On PDF: ${o.customer.replace(/"/g,'&quot;')}">${cn}</span>`:cn;})():'—'}</td>
       <td style="color:#888;white-space:nowrap">${(o.shipToCity||o.customerCity)&&(o.shipToState||o.customerState)?(o.shipToCity||o.customerCity)+', '+(o.shipToState||o.customerState):(o.shipToCity||o.customerCity||o.shipToState||o.customerState)||'—'}</td>
       <td style="color:#888;font-size:11px">${(o.items||[]).length===0?'—':(o.items.length===1?o.items[0].productNo||'—':o.items.map(i=>i.productNo).filter(Boolean).slice(0,3).join(', ')+(o.items.length>3?` +${o.items.length-3}`:''))}</td>
       <td>${tOrd.toLocaleString()}</td>
@@ -1067,7 +1108,7 @@ function showDetail(id){
       <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
     </div>
     <div class="detail-grid">
-      <div class="df"><label>Customer (bill to)</label><span>${getCanonicalCustomer(o.customer)||'—'}${o.customer&&getCanonicalCustomer(o.customer)!==o.customer?`<span style="display:block;font-size:11px;color:#888;font-weight:400;margin-top:2px">On PDF: ${o.customer}</span>`:''}</span></div>
+      <div class="df"><label>Customer (bill to)</label><span>${getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'—'}${o.customer&&getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)!==o.customer?`<span style="display:block;font-size:11px;color:#888;font-weight:400;margin-top:2px">On PDF: ${o.customer}</span>`:''}</span></div>
       <div class="df"><label>Customer city, state</label><span>${o.customerCity&&o.customerState?o.customerCity+', '+o.customerState:o.customerCity||o.customerState||'—'}</span></div>
       <div class="df"><label>Customer PO #</label><span style="font-family:monospace">${o.customerPONo||'—'}</span></div>
       <div class="df"><label>Ship to</label><span>${o.shipToName||o.customer||'—'}</span></div>
@@ -1383,10 +1424,175 @@ function setRateInline(product,val){
   renderDashboard();
 }
 
-function getCanonicalCustomer(name){
+// --- Customer identity: location-aware matching ---
+// A customer is identified by {normalizedName, city, state}.
+// Same normalized name + same city/state = same customer (even if spelling differs).
+// Same normalized name + different city/state = different branch locations.
+
+function normalizeCustomerName(name){
+  if(!name)return '';
+  let n=name.trim().toUpperCase();
+  // strip punctuation except & and -
+  n=n.replace(/[.,'"()]/g,'').replace(/\s+/g,' ');
+  // collapse common corporate suffixes — applied as whole words at end or followed by space
+  const suffixes=[
+    'INCORPORATED','INC',
+    'CORPORATION','CORP',
+    'COMPANY','CO',
+    'LIMITED','LTD',
+    'LLC','LLP','LP',
+    'PLC'
+  ];
+  // repeatedly strip trailing suffix (handles "ABC CO INC")
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const sfx of suffixes){
+      const re=new RegExp('\\s+'+sfx+'$');
+      if(re.test(n)){n=n.replace(re,'');changed=true;}
+    }
+  }
+  // normalize common utility abbreviations
+  n=n.replace(/\s*&\s*/g,' & ');
+  return n.trim();
+}
+
+function normalizeState(s){
+  return (s||'').trim().toUpperCase().slice(0,2);
+}
+function normalizeCity(s){
+  return (s||'').trim().toUpperCase().replace(/\s+/g,' ').replace(/[.,]/g,'');
+}
+
+// The stable identity key for a customer record
+function customerKey(name,city,state){
+  return normalizeCustomerName(name)+'|'+normalizeCity(city)+'|'+normalizeState(state);
+}
+
+// Order → customerKey helper. Prefers bill-to (customer) fields, falls back to ship-to.
+function orderCustomerKey(o){
+  const city=o.customerCity||o.shipToCity||'';
+  const state=o.customerState||o.shipToState||'';
+  return customerKey(o.customer,city,state);
+}
+
+// Display name: what we show in the UI for a given {name,city,state} group.
+// Order of precedence: manual alias → most-common spelling in group → provided name.
+function getCanonicalCustomer(name,city,state){
   if(!name)return name;
+  // backward-compatible signature: some call sites still pass only a name
+  if(arguments.length===1){
+    const key=name.trim().toUpperCase();
+    if(customerAliases[key])return customerAliases[key];
+    return name;
+  }
   const key=name.trim().toUpperCase();
-  return customerAliases[key]||name;
+  if(customerAliases[key])return customerAliases[key];
+  // find the most common spelling across all orders with the same location identity
+  const tgtKey=customerKey(name,city,state);
+  const spellings={};
+  orders.forEach(o=>{
+    if(orderCustomerKey(o)===tgtKey && o.customer){
+      spellings[o.customer]=(spellings[o.customer]||0)+1;
+    }
+  });
+  const best=Object.entries(spellings).sort((a,b)=>b[1]-a[1])[0];
+  return best?best[0]:name;
+}
+
+// Detect potential duplicates that need human review.
+// Two categories:
+//  A) Same normalized name + same city/state but different raw spellings (auto-grouping works; just show for confirmation)
+//  B) Similar (not identical) normalized names in the same city/state (fuzzy match — needs review)
+function detectDuplicateCustomers(){
+  // Group orders by identity key
+  const groups={};
+  orders.forEach(o=>{
+    if(!o.customer)return;
+    const k=orderCustomerKey(o);
+    if(!groups[k])groups[k]={key:k,normName:normalizeCustomerName(o.customer),city:normalizeCity(o.customerCity||o.shipToCity||''),state:normalizeState(o.customerState||o.shipToState||''),spellings:{},orders:[],revenue:0};
+    groups[k].spellings[o.customer]=(groups[k].spellings[o.customer]||0)+1;
+    groups[k].orders.push(o);
+    groups[k].revenue+=(o.orderTotal||0);
+  });
+  const groupList=Object.values(groups);
+
+  // Category A: groups with 2+ raw spellings (already auto-merged by location)
+  const autoMerged=groupList.filter(g=>Object.keys(g.spellings).length>1);
+
+  // Category B: fuzzy — different normalized names but same city/state AND high similarity
+  const fuzzyPairs=[];
+  for(let i=0;i<groupList.length;i++){
+    for(let j=i+1;j<groupList.length;j++){
+      const a=groupList[i],b=groupList[j];
+      if(!a.city||!b.city||!a.state||!b.state)continue;
+      if(a.city!==b.city||a.state!==b.state)continue;
+      if(a.normName===b.normName)continue; // already merged
+      const sim=stringSimilarity(a.normName,b.normName);
+      if(sim>=0.78){
+        fuzzyPairs.push({a,b,similarity:sim});
+      }
+    }
+  }
+  // Category C: same normalized name, DIFFERENT cities/states — these are branches, not duplicates.
+  // Just surface for visibility so Kevin knows he has multi-location customers.
+  const branchGroups={};
+  groupList.forEach(g=>{
+    if(!g.normName)return;
+    if(!branchGroups[g.normName])branchGroups[g.normName]=[];
+    branchGroups[g.normName].push(g);
+  });
+  const multiLocation=Object.entries(branchGroups).filter(([,gs])=>gs.length>1).map(([normName,gs])=>({normName,locations:gs}));
+
+  return {autoMerged,fuzzyPairs,multiLocation};
+}
+
+// Levenshtein-based similarity for fuzzy matching
+function stringSimilarity(a,b){
+  if(!a||!b)return 0;
+  if(a===b)return 1;
+  const longer=a.length>=b.length?a:b;
+  const shorter=a.length>=b.length?b:a;
+  if(longer.length===0)return 1;
+  // quick length filter
+  if(longer.length-shorter.length>Math.max(4,longer.length*0.4))return 0;
+  // compute edit distance
+  const m=shorter.length,n=longer.length;
+  let prev=Array(n+1).fill(0).map((_,i)=>i);
+  let curr=Array(n+1).fill(0);
+  for(let i=1;i<=m;i++){
+    curr[0]=i;
+    for(let j=1;j<=n;j++){
+      const cost=shorter[i-1]===longer[j-1]?0:1;
+      curr[j]=Math.min(curr[j-1]+1,prev[j]+1,prev[j-1]+cost);
+    }
+    [prev,curr]=[curr,prev];
+  }
+  return (longer.length-prev[n])/longer.length;
+}
+
+// Apply a merge decision: write an alias so all variants point to the chosen canonical name
+function mergeCustomerVariants(canonicalName,variantNames){
+  variantNames.forEach(v=>{
+    if(v===canonicalName)return;
+    customerAliases[v.trim().toUpperCase()]=canonicalName;
+  });
+  localStorage.setItem('dewart_customer_aliases',JSON.stringify(customerAliases));
+  saveAliasesToOneDrive();
+  renderDuplicateReview();
+  renderCustomers();
+  renderOrders();
+  renderDashboard();
+}
+
+// Record a "keep separate" decision so the pair stops showing up in the review panel
+function markNotDuplicate(keyA,keyB){
+  if(!customerNotDuplicates)customerNotDuplicates={};
+  const pairKey=[keyA,keyB].sort().join('||');
+  customerNotDuplicates[pairKey]=true;
+  localStorage.setItem('dewart_customer_not_duplicates',JSON.stringify(customerNotDuplicates));
+  saveNotDuplicatesToOneDrive();
+  renderDuplicateReview();
 }
 
 function setAliasInline(originalName,val){
@@ -1411,66 +1617,169 @@ function clearAlias(originalName){
   renderOrders();
 }
 
+function renderDuplicateReview(){
+  const el=document.getElementById('duplicate-review');
+  if(!el)return;
+  const {autoMerged,fuzzyPairs,multiLocation}=detectDuplicateCustomers();
+
+  // filter fuzzy pairs against the "keep separate" list
+  const activeFuzzy=fuzzyPairs.filter(p=>{
+    const pk=[p.a.key,p.b.key].sort().join('||');
+    return !customerNotDuplicates[pk];
+  });
+
+  if(!autoMerged.length && !activeFuzzy.length && !multiLocation.length){
+    el.innerHTML='<div style="padding:1rem;color:#888;font-size:13px">✓ No duplicate customers detected.</div>';
+    return;
+  }
+
+  let html='';
+
+  // Section 1: fuzzy matches that need manual review
+  if(activeFuzzy.length){
+    html+=`<div style="margin-bottom:1.5rem">
+      <div style="font-size:13px;font-weight:600;color:#E65100;margin-bottom:8px">⚠ ${activeFuzzy.length} possible duplicate${activeFuzzy.length!==1?'s':''} — needs review</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">Similar names at the same location. If these are the same customer, merge them. If they're different, click "Keep separate" to dismiss.</div>`;
+    activeFuzzy.forEach((pair,pi)=>{
+      const a=pair.a,b=pair.b;
+      const aName=Object.entries(a.spellings).sort((x,y)=>y[1]-x[1])[0][0];
+      const bName=Object.entries(b.spellings).sort((x,y)=>y[1]-x[1])[0][0];
+      const pairId='fuzzy-'+pi;
+      html+=`<div style="border:1px solid #FFE0B2;background:#FFF8E1;border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+          <div style="background:#fff;border-radius:6px;padding:10px">
+            <div style="font-weight:600;font-size:13px;margin-bottom:4px">${aName.replace(/</g,'&lt;')}</div>
+            <div style="font-size:11px;color:#888">${a.city}, ${a.state} · ${a.orders.length} order${a.orders.length!==1?'s':''} · ${fmt(a.revenue)}</div>
+          </div>
+          <div style="background:#fff;border-radius:6px;padding:10px">
+            <div style="font-weight:600;font-size:13px;margin-bottom:4px">${bName.replace(/</g,'&lt;')}</div>
+            <div style="font-size:11px;color:#888">${b.city}, ${b.state} · ${b.orders.length} order${b.orders.length!==1?'s':''} · ${fmt(b.revenue)}</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:#888;margin-bottom:8px">Similarity: ${Math.round(pair.similarity*100)}% · Same city/state</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button onclick="mergeFuzzyPair('${encodeURIComponent(aName)}','${encodeURIComponent(bName)}','a')" style="padding:6px 12px;border-radius:6px;border:none;background:#185FA5;color:#fff;cursor:pointer;font-size:12px;font-weight:500">Merge → "${aName.replace(/"/g,'&quot;').slice(0,30)}"</button>
+          <button onclick="mergeFuzzyPair('${encodeURIComponent(aName)}','${encodeURIComponent(bName)}','b')" style="padding:6px 12px;border-radius:6px;border:none;background:#185FA5;color:#fff;cursor:pointer;font-size:12px;font-weight:500">Merge → "${bName.replace(/"/g,'&quot;').slice(0,30)}"</button>
+          <button onclick="markNotDuplicate('${a.key.replace(/'/g,"\\'")}','${b.key.replace(/'/g,"\\'")}')" style="padding:6px 12px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">Keep separate</button>
+        </div>
+      </div>`;
+    });
+    html+='</div>';
+  }
+
+  // Section 2: already auto-merged (for confirmation)
+  if(autoMerged.length){
+    html+=`<div style="margin-bottom:1.5rem">
+      <div style="font-size:13px;font-weight:600;color:#2E7D32;margin-bottom:8px">✓ ${autoMerged.length} customer${autoMerged.length!==1?'s':''} auto-consolidated by location</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">Different spellings of the same name at the same location — these are grouped automatically.</div>`;
+    autoMerged.forEach(g=>{
+      const variants=Object.entries(g.spellings).sort((a,b)=>b[1]-a[1]);
+      const primary=variants[0][0];
+      html+=`<div style="background:#E8F5E9;border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:2px">${primary.replace(/</g,'&lt;')} <span style="color:#666;font-weight:400">— ${g.city}, ${g.state}</span></div>
+        <div style="color:#666">Combining ${variants.length} spellings: ${variants.map(v=>'"'+v[0].replace(/</g,'&lt;')+'" ('+v[1]+')').join(', ')}</div>
+      </div>`;
+    });
+    html+='</div>';
+  }
+
+  // Section 3: multi-location (branches)
+  if(multiLocation.length){
+    html+=`<div style="margin-bottom:0.5rem">
+      <div style="font-size:13px;font-weight:600;color:#185FA5;margin-bottom:8px">📍 ${multiLocation.length} customer${multiLocation.length!==1?'s':''} with multiple locations</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">Same name at different locations — tracked as separate branches.</div>`;
+    multiLocation.forEach(m=>{
+      html+=`<div style="background:#EBF4FF;border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:4px">${m.normName.replace(/</g,'&lt;')}</div>
+        <div style="color:#666">${m.locations.map(l=>{
+          const primary=Object.entries(l.spellings).sort((a,b)=>b[1]-a[1])[0][0];
+          return (l.city||'?')+', '+(l.state||'?')+' ('+l.orders.length+' order'+(l.orders.length!==1?'s':'')+', '+fmt(l.revenue)+')';
+        }).join(' · ')}</div>
+      </div>`;
+    });
+    html+='</div>';
+  }
+
+  el.innerHTML=html;
+}
+
+// helper called by the inline buttons in the fuzzy-review UI
+function mergeFuzzyPair(encodedA,encodedB,keepSide){
+  const a=decodeURIComponent(encodedA);
+  const b=decodeURIComponent(encodedB);
+  const keep=keepSide==='a'?a:b;
+  const drop=keepSide==='a'?b:a;
+  if(!confirm(`Merge "${drop}" into "${keep}"?\n\nAll orders using "${drop}" will display as "${keep}" going forward.`))return;
+  mergeCustomerVariants(keep,[drop]);
+}
+
 function renderCustomers(){
   const el=document.getElementById('customers-list');
   if(!el)return;
-  const stats={};
+
+  // Group orders by location-aware identity
+  const groups={};
   orders.forEach(o=>{
-    const name=o.customer;
-    if(!name)return;
-    if(!stats[name])stats[name]={orderCount:0,revenue:0};
-    stats[name].orderCount++;
-    stats[name].revenue+=(o.orderTotal||0);
+    if(!o.customer)return;
+    const k=orderCustomerKey(o);
+    if(!groups[k]){
+      groups[k]={
+        key:k,
+        city:o.customerCity||o.shipToCity||'',
+        state:o.customerState||o.shipToState||'',
+        spellings:{},
+        orderCount:0,
+        revenue:0
+      };
+    }
+    groups[k].spellings[o.customer]=(groups[k].spellings[o.customer]||0)+1;
+    groups[k].orderCount++;
+    groups[k].revenue+=(o.orderTotal||0);
   });
-  // include orphaned aliases (alias set but no current orders match)
-  Object.keys(customerAliases).forEach(upperKey=>{
-    const match=Object.keys(stats).find(n=>n.trim().toUpperCase()===upperKey);
-    if(!match)stats[upperKey]={orderCount:0,revenue:0,isOrphan:true};
-  });
-  const entries=Object.entries(stats).sort((a,b)=>b[1].revenue-a[1].revenue);
-  if(!entries.length){el.innerHTML='<div class="empty">No customers yet — import some orders to see customers here</div>';return;}
-  // preview: show canonical names that currently consolidate 2+ variants
-  const grouped={};
-  entries.forEach(([name,s])=>{
-    if(s.isOrphan)return;
-    const canonical=getCanonicalCustomer(name);
-    if(!grouped[canonical])grouped[canonical]={variants:[],orderCount:0,revenue:0};
-    if(!grouped[canonical].variants.includes(name))grouped[canonical].variants.push(name);
-    grouped[canonical].orderCount+=s.orderCount;
-    grouped[canonical].revenue+=s.revenue;
-  });
-  const consolidated=Object.entries(grouped).filter(([c,g])=>g.variants.length>1);
-  let html='';
-  if(consolidated.length){
-    html+=`<div style="background:#E8F5E9;border-radius:8px;padding:12px 14px;margin-bottom:1rem;font-size:12px;line-height:1.7">
-      <div style="font-weight:600;color:#2E7D32;margin-bottom:4px">✓ ${consolidated.length} customer${consolidated.length!==1?'s':''} currently consolidated</div>
-      ${consolidated.map(([c,g])=>`<div><strong>${c}</strong> — ${g.orderCount} orders, ${fmt(g.revenue)} — combining: ${g.variants.filter(v=>v!==c).map(v=>'"'+v+'"').join(', ')}</div>`).join('')}
-    </div>`;
+
+  const groupList=Object.values(groups).sort((a,b)=>b.revenue-a.revenue);
+
+  if(!groupList.length){
+    el.innerHTML='<div class="empty">No customers yet — import some orders to see customers here</div>';
+    renderDuplicateReview();
+    return;
   }
-  html+=`<table><thead><tr>
-    <th>Customer name (from PDF)</th>
+
+  let html=`<table><thead><tr>
+    <th>Customer</th>
+    <th>Location</th>
     <th>Orders</th>
     <th>Revenue</th>
-    <th>Canonical name (blank = use as-is)</th>
+    <th>Display name (override)</th>
     <th></th>
-  </tr></thead>
-  <tbody>${entries.map(([name,s])=>{
-    const key=name.trim().toUpperCase();
-    const currentAlias=customerAliases[key]||'';
-    const safeName=name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    return `<tr${s.isOrphan?' style="opacity:.5"':''}>
-      <td style="font-weight:500">${name}${s.isOrphan?' <span style="font-size:10px;color:#aaa">(no orders)</span>':''}</td>
-      <td style="color:#888">${s.orderCount||'—'}</td>
-      <td style="font-weight:600">${s.revenue>0?fmt(s.revenue):'—'}</td>
+  </tr></thead><tbody>`;
+
+  groupList.forEach(g=>{
+    const variants=Object.entries(g.spellings).sort((a,b)=>b[1]-a[1]);
+    const primaryName=variants[0][0];
+    const aliasKey=primaryName.trim().toUpperCase();
+    const currentAlias=customerAliases[aliasKey]||'';
+    const safeName=primaryName.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const variantsNote=variants.length>1
+      ? `<div style="font-size:10px;color:#888;margin-top:3px">Also appears as: ${variants.slice(1).map(v=>'"'+v[0].replace(/</g,'&lt;')+'"').join(', ')}</div>`
+      : '';
+    html+=`<tr>
+      <td style="font-weight:500">${primaryName.replace(/</g,'&lt;')}${variantsNote}</td>
+      <td style="color:#666;font-size:12px">${g.city&&g.state?g.city+', '+g.state:(g.city||g.state||'—')}</td>
+      <td style="color:#888">${g.orderCount}</td>
+      <td style="font-weight:600">${fmt(g.revenue)}</td>
       <td>
         <input type="text" value="${currentAlias.replace(/"/g,'&quot;')}" placeholder="—"
-          style="width:100%;min-width:220px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px"
+          style="width:100%;min-width:200px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px"
           onchange="setAliasInline('${safeName}',this.value)">
       </td>
       <td>${currentAlias?`<button onclick="clearAlias('${safeName}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Clear</button>`:''}</td>
     </tr>`;
-  }).join('')}</tbody></table>`;
+  });
+
+  html+='</tbody></table>';
   el.innerHTML=html;
+  renderDuplicateReview();
 }
 
 function getCommission(productNo){
