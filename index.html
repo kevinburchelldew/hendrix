@@ -87,6 +87,20 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
 .bar-fill{height:100%;border-radius:4px;background:#0F6E56}
 .bar-val{font-size:12px;font-weight:600;min-width:65px;text-align:right}
 .dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media print{
+  body{background:#fff;color:#000;font-size:11pt}
+  .tabs,.search-row,.filter-pills,.tab,#year-filter,.metric,#auth-section,#clientid-wrap,.no-print,button{display:none !important}
+  .section{display:block !important;padding:0;margin:0}
+  .section:not(#tab-reports){display:none !important}
+  .card{border:none !important;padding:0 !important;box-shadow:none !important;page-break-inside:avoid;margin-bottom:1rem}
+  #report-controls{display:none !important}
+  #report-body{padding:0 !important}
+  table{font-size:10pt;page-break-inside:auto}
+  tr{page-break-inside:avoid}
+  th{background:#eee !important;color:#000 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .report-print-header{display:block !important;margin-bottom:1rem;padding-bottom:0.5rem;border-bottom:2px solid #000}
+}
+.report-print-header{display:none}
 </style>
 </head>
 <body>
@@ -115,6 +129,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
     <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab" onclick="switchTab('orders')">Orders</button>
     <button class="tab" onclick="switchTab('upload')">Import PDF</button>
+    <button class="tab" onclick="switchTab('reports')">Reports</button>
     <button class="tab" onclick="switchTab('customers')">Customers</button>
     <button class="tab" onclick="switchTab('commission')">Commission Rates</button>
   </div>
@@ -197,8 +212,9 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
   <!-- ORDERS -->
   <div id="tab-orders" class="section">
     <div class="search-row">
-      <input type="text" id="search-input" placeholder="Search by customer, SO#, PO#, or product..." oninput="renderOrders()">
-      <select id="sort-select" onchange="renderOrders()">
+      <input type="text" id="search-input" placeholder="Search by customer, SO#, PO#, or product..." oninput="onSearchInput()">
+      <select id="branch-filter" onchange="onBranchFilterChange()" style="width:240px"><option value="">All branches</option></select>
+      <select id="sort-select" onchange="onSortChange()">
         <option value="date-desc">Newest first</option>
         <option value="date-asc">Oldest first</option>
         <option value="ship-asc">Ship date soonest</option>
@@ -217,6 +233,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
       <span class="pill" onclick="setFilter('backorder',this)">Backordered</span>
       <span class="pill" onclick="setFilter('overdue',this)">Overdue</span>
     </div>
+    <div id="orders-summary" style="font-size:12px;color:#666;margin-bottom:8px;padding:0 4px"></div>
     <div id="order-detail"></div>
     <div class="card" style="padding:0 0.5rem">
       <div id="orders-list"></div>
@@ -224,6 +241,19 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
   </div>
 
   <!-- COMMISSION -->
+  <!-- REPORTS -->
+  <div id="tab-reports" class="section">
+    <div class="card" style="padding:0">
+      <div style="display:flex;border-bottom:1px solid #e5e5e5">
+        <button class="report-tab active" data-report="branch" onclick="switchReport('branch')" style="flex:1;padding:14px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:600;color:#1a1a1a;border-bottom:2px solid #1a1a1a">Per-branch revenue</button>
+        <button class="report-tab" data-report="commission" onclick="switchReport('commission')" style="flex:1;padding:14px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:500;color:#888;border-bottom:2px solid transparent">Commission</button>
+        <button class="report-tab" data-report="aging" onclick="switchReport('aging')" style="flex:1;padding:14px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:500;color:#888;border-bottom:2px solid transparent">Aging</button>
+      </div>
+      <div id="report-controls" style="padding:14px 18px;border-bottom:1px solid #f0f0f0;background:#fafafa;display:flex;gap:10px;align-items:center;flex-wrap:wrap"></div>
+      <div id="report-body" style="padding:18px"></div>
+    </div>
+  </div>
+
   <!-- CUSTOMERS -->
   <div id="tab-customers" class="section">
     <div class="card" id="duplicate-review-card">
@@ -276,6 +306,12 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
       <div id="upload-status"></div>
     </div>
     <div class="card">
+      <div class="card-title">Manual invoice entry</div>
+      <div style="font-size:13px;color:#666;line-height:1.6;margin-bottom:12px">No PDF? Enter invoice details by hand. Useful when a customer calls in shipment info, when the PDF won't extract cleanly, or for quick adjustments.</div>
+      <button onclick="showManualInvoiceForm()" style="padding:8px 18px;border-radius:8px;border:1px solid #1a1a1a;background:#fff;color:#1a1a1a;cursor:pointer;font-size:13px;font-weight:500">+ Enter invoice manually</button>
+      <div id="manual-invoice-form"></div>
+    </div>
+    <div class="card">
       <div class="card-title">How it works</div>
       <div style="font-size:13px;color:#666;line-height:1.8">
         <strong>Order acknowledgement:</strong> Upload the PDF from Marmon — creates a new record with SO#, customer PO#, scheduled ship date, line items, and total.<br>
@@ -324,6 +360,7 @@ function setFilter(f,el){
   activeFilter=f;
   document.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
+  saveOrderFilterPrefs();
   renderOrders();
 }
 
@@ -367,7 +404,7 @@ async function loadFromOneDrive(){
   try{
     setSyncStatus('Loading from OneDrive...','');
     const data=await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content');
-    if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');renderDashboard();renderOrders();}
+    if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');populateBranchFilter();const savedBranch=loadOrderFilterPrefs();if(savedBranch){const sel=document.getElementById('branch-filter');if(sel)sel.value=savedBranch;}renderDashboard();renderOrders();}
     await loadAliasesFromOneDrive();
     await loadNotDuplicatesFromOneDrive();
   }catch(e){
@@ -1066,12 +1103,15 @@ function renderDashboard(){
 }
 
 function renderOrders(){
+  populateBranchFilter();
   const q=(document.getElementById('search-input')?.value||'').toLowerCase();
   const sort=document.getElementById('sort-select')?.value||'date-desc';
+  const branchFilterKey=document.getElementById('branch-filter')?.value||'';
   let filtered=orders.filter(o=>{
     const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'').toLowerCase().includes(q)||(o.customerCity||'').toLowerCase().includes(q)||(o.customerState||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
     const matchF=activeFilter==='all'||getStatus(o)===activeFilter;
-    return matchQ&&matchF;
+    const matchB=!branchFilterKey||orderCustomerKey(o)===branchFilterKey;
+    return matchQ&&matchF&&matchB;
   });
   // Precompute branch metadata per order for branch sorting
   const branchTotals={};
@@ -1111,6 +1151,14 @@ function renderOrders(){
     return 0;
   });
   const el=document.getElementById('orders-list');
+  const summaryEl=document.getElementById('orders-summary');
+  // Update summary line: showing X of Y · $total
+  if(summaryEl){
+    const filteredTotal=filtered.reduce((a,o)=>a+(o.orderTotal||0),0);
+    if(orders.length===0){summaryEl.textContent='';}
+    else if(filtered.length===orders.length){summaryEl.innerHTML=`Showing all <strong>${orders.length}</strong> order${orders.length!==1?'s':''} · <strong>${fmt(filteredTotal)}</strong> total value`;}
+    else{summaryEl.innerHTML=`Showing <strong>${filtered.length}</strong> of ${orders.length} order${orders.length!==1?'s':''} · <strong>${fmt(filteredTotal)}</strong> filtered value`;}
+  }
   if(!filtered.length){el.innerHTML='<div class="empty">'+(orders.length?'No matching orders':'No orders yet — use Import PDF to get started')+'</div>';return;}
 
   const isBranchSort=sort.startsWith('branch');
@@ -1165,7 +1213,8 @@ function showDetail(id){
     <button class="close-btn" onclick="document.getElementById('order-detail').innerHTML=''">×</button>
     <div style="font-size:15px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:10px">
       Sales Order ${o.salesOrderNo||'—'} &nbsp;${statusBadge(o)}
-      <button onclick="showEditForm('${o.id}')" style="margin-left:auto;padding:4px 12px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px;font-weight:500">Edit</button>
+      <button onclick="addInvoiceFromDetail('${o.id}')" style="margin-left:auto;padding:4px 12px;border-radius:8px;border:1px solid #2E7D32;background:#fff;color:#2E7D32;cursor:pointer;font-size:12px;font-weight:500">+ Add invoice</button>
+      <button onclick="showEditForm('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px;font-weight:500">Edit</button>
       <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
     </div>
     <div class="detail-grid">
@@ -1848,12 +1897,603 @@ function getCommission(productNo){
   return commissionRates[productNo.toUpperCase()]??null;
 }
 
+// ---------- Filter prefs persistence + debounced search ----------
+let searchDebounceTimer=null;
+function onSearchInput(){
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer=setTimeout(()=>{
+    saveOrderFilterPrefs();
+    renderOrders();
+  },220);
+}
+function onBranchFilterChange(){saveOrderFilterPrefs();renderOrders();}
+function onSortChange(){saveOrderFilterPrefs();renderOrders();}
+
+function saveOrderFilterPrefs(){
+  try{
+    localStorage.setItem('dewart_order_prefs',JSON.stringify({
+      sort:document.getElementById('sort-select')?.value||'date-desc',
+      branch:document.getElementById('branch-filter')?.value||'',
+      filter:activeFilter||'all',
+      search:document.getElementById('search-input')?.value||''
+    }));
+  }catch(e){}
+}
+
+function loadOrderFilterPrefs(){
+  try{
+    const p=JSON.parse(localStorage.getItem('dewart_order_prefs')||'{}');
+    if(p.sort){const s=document.getElementById('sort-select');if(s)s.value=p.sort;}
+    if(p.search){const s=document.getElementById('search-input');if(s)s.value=p.search;}
+    if(p.filter&&p.filter!=='all'){
+      activeFilter=p.filter;
+      document.querySelectorAll('.filter-pills .pill').forEach(pill=>{
+        pill.classList.toggle('active',pill.textContent.trim().toLowerCase().startsWith(p.filter));
+      });
+    }
+    // branch filter has to be set after population
+    return p.branch||'';
+  }catch(e){return '';}
+}
+
+// Populate the branch <select> with one entry per known branch (canonical name + city/state)
+function populateBranchFilter(preserveValue){
+  const sel=document.getElementById('branch-filter');
+  if(!sel)return;
+  const current=preserveValue!==undefined?preserveValue:sel.value;
+  const groups={};
+  orders.forEach(o=>{
+    if(!o.customer)return;
+    const k=orderCustomerKey(o);
+    if(!groups[k]){
+      groups[k]={
+        key:k,
+        name:getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer,
+        city:o.customerCity||o.shipToCity||'',
+        state:o.customerState||o.shipToState||'',
+        count:0
+      };
+    }
+    groups[k].count++;
+  });
+  const list=Object.values(groups).sort((a,b)=>{
+    const an=a.name.toUpperCase(),bn=b.name.toUpperCase();
+    if(an!==bn)return an<bn?-1:1;
+    return (a.state+a.city).localeCompare(b.state+b.city);
+  });
+  let html=`<option value="">All branches (${orders.length} order${orders.length!==1?'s':''})</option>`;
+  list.forEach(g=>{
+    const loc=[g.city,g.state].filter(Boolean).join(', ');
+    const label=g.name+(loc?' — '+loc:'')+' ('+g.count+')';
+    html+=`<option value="${g.key.replace(/"/g,'&quot;')}">${label.replace(/</g,'&lt;')}</option>`;
+  });
+  sel.innerHTML=html;
+  if(current&&list.some(g=>g.key===current))sel.value=current;
+}
+
+// ---------- Manual invoice entry ----------
+function showManualInvoiceForm(prefilledOrderId){
+  const container=document.getElementById('manual-invoice-form');
+  if(!container)return;
+  if(!orders.length){
+    container.innerHTML='<div class="msg-warn" style="margin-top:12px">No orders yet — import an order acknowledgement first, then you can add invoices to it.</div>';
+    return;
+  }
+  // Sort orders for the dropdown: open ones first (pending/partial/backorder), most recent first
+  const sortedOrders=[...orders].sort((a,b)=>{
+    const sa=getStatus(a),sb=getStatus(b);
+    const aOpen=sa!=='shipped',bOpen=sb!=='shipped';
+    if(aOpen!==bOpen)return aOpen?-1:1;
+    return (b.orderDate||'')>(a.orderDate||'')?1:-1;
+  });
+  const todayInput=new Date().toISOString().slice(0,10).split('-');
+  const todayUS=todayInput[1]+'/'+todayInput[2]+'/'+todayInput[0];
+  container.innerHTML=`<div style="margin-top:14px;padding:16px;border:1px solid #e0e0e0;border-radius:10px;background:#fafafa">
+    <div style="font-weight:600;font-size:14px;margin-bottom:12px">Enter invoice details</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div>
+        <label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Sales order *</label>
+        <select id="mi-order" onchange="renderManualInvoiceLines()" style="width:100%;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+          <option value="">— Select an order —</option>
+          ${sortedOrders.map(o=>{
+            const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'(no customer)';
+            const st=getStatus(o);
+            const stTag=st==='shipped'?' [shipped]':st==='backorder'?' [backorder]':st==='partial'?' [partial]':'';
+            return `<option value="${o.id}" ${prefilledOrderId&&String(o.id)===String(prefilledOrderId)?'selected':''}>SO ${o.salesOrderNo||'?'} — ${cn.replace(/</g,'&lt;')}${stTag}</option>`;
+          }).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Invoice # *</label>
+        <input id="mi-invno" placeholder="e.g. 12345678" style="width:100%;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Invoice date (MM/DD/YYYY)</label>
+        <input id="mi-invdate" placeholder="${todayUS}" value="${todayUS}" style="width:100%;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Actual ship date (MM/DD/YYYY)</label>
+        <input id="mi-shipdate" placeholder="${todayUS}" value="${todayUS}" style="width:100%;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+      </div>
+    </div>
+    <div id="mi-lines"></div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:12px;align-items:end">
+      <div>
+        <label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Invoice total ($) — leave blank to auto-calculate from lines</label>
+        <input id="mi-total" type="number" step="0.01" placeholder="auto" style="width:100%;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="cancelManualInvoice()" style="padding:8px 16px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:13px">Cancel</button>
+        <button onclick="submitManualInvoice()" style="padding:8px 20px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Apply invoice</button>
+      </div>
+    </div>
+    <div id="mi-status"></div>
+  </div>`;
+  if(prefilledOrderId)renderManualInvoiceLines();
+  container.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function renderManualInvoiceLines(){
+  const sel=document.getElementById('mi-order');
+  const linesEl=document.getElementById('mi-lines');
+  if(!sel||!linesEl)return;
+  const id=sel.value;
+  if(!id){linesEl.innerHTML='';return;}
+  const o=orders.find(x=>String(x.id)===String(id));
+  if(!o||!o.items||!o.items.length){linesEl.innerHTML='<div style="font-size:12px;color:#888;padding:8px 0">This order has no line items.</div>';return;}
+  linesEl.innerHTML=`<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin:8px 0 6px">Quantities shipped on this invoice</div>
+    <table style="width:100%;font-size:12px"><thead><tr>
+      <th style="text-align:left;padding:6px 8px;color:#888;font-size:11px">Line</th>
+      <th style="text-align:left;padding:6px 8px;color:#888;font-size:11px">Product</th>
+      <th style="text-align:right;padding:6px 8px;color:#888;font-size:11px">Ordered</th>
+      <th style="text-align:right;padding:6px 8px;color:#888;font-size:11px">Already shipped</th>
+      <th style="text-align:right;padding:6px 8px;color:#888;font-size:11px">Backorder</th>
+      <th style="text-align:right;padding:6px 8px;color:#888;font-size:11px;width:120px">Shipping now</th>
+    </tr></thead><tbody>
+    ${o.items.map((it,i)=>{
+      const ordered=it.qty||0;
+      const already=it.qtyShipped||0;
+      const backorder=Math.max(0,ordered-already);
+      return `<tr>
+        <td style="padding:6px 8px">${it.lineNo||(i+1)}</td>
+        <td style="padding:6px 8px;font-family:monospace;font-size:11px">${it.productNo||'—'}</td>
+        <td style="padding:6px 8px;text-align:right">${ordered.toLocaleString()}</td>
+        <td style="padding:6px 8px;text-align:right;color:#2E7D32">${already.toLocaleString()}</td>
+        <td style="padding:6px 8px;text-align:right;color:#4527A0;font-weight:${backorder>0?600:400}">${backorder.toLocaleString()}</td>
+        <td style="padding:6px 8px;text-align:right">
+          <input type="number" id="mi-qty-${i}" min="0" max="${backorder}" value="${backorder}" style="width:100%;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:12px;text-align:right">
+        </td>
+      </tr>`;
+    }).join('')}
+    </tbody></table>`;
+}
+
+function cancelManualInvoice(){
+  document.getElementById('manual-invoice-form').innerHTML='';
+}
+
+async function submitManualInvoice(){
+  const status=document.getElementById('mi-status');
+  const orderId=document.getElementById('mi-order').value;
+  if(!orderId){status.innerHTML='<div class="msg-err">Please select a sales order.</div>';return;}
+  const idx=orders.findIndex(x=>String(x.id)===String(orderId));
+  if(idx<0){status.innerHTML='<div class="msg-err">Order not found.</div>';return;}
+  const order=orders[idx];
+  const invNo=document.getElementById('mi-invno').value.trim();
+  if(!invNo){status.innerHTML='<div class="msg-err">Please enter an invoice number.</div>';return;}
+  const invDate=parseDate(document.getElementById('mi-invdate').value.trim())||document.getElementById('mi-invdate').value.trim();
+  const shipDate=parseDate(document.getElementById('mi-shipdate').value.trim())||document.getElementById('mi-shipdate').value.trim();
+  // Build line items with qty shipped
+  const items=(order.items||[]).map((it,i)=>{
+    const inputEl=document.getElementById('mi-qty-'+i);
+    const qty=inputEl?parseFloat(inputEl.value)||0:0;
+    return {lineNo:it.lineNo,productNo:it.productNo,qtyShipped:qty,unitPrice:it.unitPrice,total:qty*(it.unitPrice||0)};
+  }).filter(it=>it.qtyShipped>0);
+  if(!items.length){status.innerHTML='<div class="msg-err">No line items have a shipping quantity. Enter at least one quantity above.</div>';return;}
+  // Calculate invoice total: explicit override, else sum of line totals
+  const explicitTotal=parseFloat(document.getElementById('mi-total').value);
+  const computedTotal=items.reduce((a,b)=>a+(b.total||0),0);
+  const invoiceTotal=isFinite(explicitTotal)&&explicitTotal>0?explicitTotal:computedTotal;
+  const inv={invoiceNo:invNo,invoiceDate:invDate,actualShipDate:shipDate,invoiceTotal:invoiceTotal,items:items};
+  status.innerHTML='<div style="padding:8px 0;font-size:13px;color:#666"><span class="spinner"></span>Applying invoice...</div>';
+  try{
+    await applyInvoiceToOrder(inv,idx,status);
+    populateBranchFilter();
+    setTimeout(()=>{document.getElementById('manual-invoice-form').innerHTML='';},1500);
+  }catch(e){
+    status.innerHTML='<div class="msg-err">Failed: '+(e.message||e)+'</div>';
+  }
+}
+
+// ---------- REPORTS ----------
+let activeReport='branch';
+let reportPeriod='ytd';
+let reportCustomFrom='';
+let reportCustomTo='';
+let reportGroupBy='branch';
+
+function switchReport(name){
+  activeReport=name;
+  document.querySelectorAll('.report-tab').forEach(b=>{
+    const isActive=b.dataset.report===name;
+    b.style.color=isActive?'#1a1a1a':'#888';
+    b.style.fontWeight=isActive?'600':'500';
+    b.style.borderBottom='2px solid '+(isActive?'#1a1a1a':'transparent');
+    b.classList.toggle('active',isActive);
+  });
+  renderReport();
+}
+
+function renderReport(){
+  if(activeReport==='branch')renderBranchReport();
+  else if(activeReport==='commission')renderCommissionReport();
+  else if(activeReport==='aging')renderAgingReport();
+}
+
+// Date range helpers
+function periodRange(period,customFrom,customTo){
+  const now=new Date();
+  const y=now.getFullYear(),m=now.getMonth();
+  let from,to;
+  if(period==='this-month'){from=new Date(y,m,1);to=new Date(y,m+1,0);}
+  else if(period==='last-month'){from=new Date(y,m-1,1);to=new Date(y,m,0);}
+  else if(period==='this-quarter'){const q=Math.floor(m/3);from=new Date(y,q*3,1);to=new Date(y,q*3+3,0);}
+  else if(period==='last-quarter'){const q=Math.floor(m/3)-1;const fy=q<0?y-1:y;const fq=q<0?3:q;from=new Date(fy,fq*3,1);to=new Date(fy,fq*3+3,0);}
+  else if(period==='ytd'){from=new Date(y,0,1);to=now;}
+  else if(period==='last-year'){from=new Date(y-1,0,1);to=new Date(y-1,11,31);}
+  else if(period==='all'){return {from:null,to:null,label:'All time'};}
+  else if(period==='custom'){
+    from=customFrom?new Date(customFrom+'T00:00:00'):null;
+    to=customTo?new Date(customTo+'T23:59:59'):null;
+  }
+  const fmtD=d=>d?d.toISOString().slice(0,10):'';
+  const labelMap={'this-month':'This month','last-month':'Last month','this-quarter':'This quarter','last-quarter':'Last quarter','ytd':'Year to date','last-year':'Last year','all':'All time','custom':'Custom'};
+  return {from,to,label:labelMap[period]||period,fromStr:fmtD(from),toStr:fmtD(to)};
+}
+
+function ordersInRange(from,to,dateField){
+  const f=dateField||'orderDate';
+  return orders.filter(o=>{
+    const d=parseDate(o[f]);
+    if(!d)return false;
+    const dd=new Date(d+'T12:00:00');
+    if(from&&dd<from)return false;
+    if(to&&dd>to)return false;
+    return true;
+  });
+}
+
+function periodSelectorHTML(extra){
+  return `<label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em">Period:</label>
+    <select id="rpt-period" onchange="onReportPeriodChange()" style="height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px">
+      <option value="this-month" ${reportPeriod==='this-month'?'selected':''}>This month</option>
+      <option value="last-month" ${reportPeriod==='last-month'?'selected':''}>Last month</option>
+      <option value="this-quarter" ${reportPeriod==='this-quarter'?'selected':''}>This quarter</option>
+      <option value="last-quarter" ${reportPeriod==='last-quarter'?'selected':''}>Last quarter</option>
+      <option value="ytd" ${reportPeriod==='ytd'?'selected':''}>Year to date</option>
+      <option value="last-year" ${reportPeriod==='last-year'?'selected':''}>Last year</option>
+      <option value="all" ${reportPeriod==='all'?'selected':''}>All time</option>
+      <option value="custom" ${reportPeriod==='custom'?'selected':''}>Custom range...</option>
+    </select>
+    ${reportPeriod==='custom'?`
+      <input type="date" id="rpt-from" value="${reportCustomFrom}" onchange="reportCustomFrom=this.value;renderReport()" style="height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px">
+      <span style="font-size:11px;color:#888">to</span>
+      <input type="date" id="rpt-to" value="${reportCustomTo}" onchange="reportCustomTo=this.value;renderReport()" style="height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px">
+    `:''}
+    ${extra||''}
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button onclick="window.print()" style="padding:6px 14px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">🖨 Print / Save PDF</button>
+      <button onclick="exportCurrentReport()" style="padding:6px 14px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">⬇ Export CSV</button>
+    </div>`;
+}
+
+function onReportPeriodChange(){
+  reportPeriod=document.getElementById('rpt-period').value;
+  if(reportPeriod==='custom'&&!reportCustomFrom){
+    const now=new Date();
+    reportCustomFrom=new Date(now.getFullYear(),now.getMonth()-2,1).toISOString().slice(0,10);
+    reportCustomTo=now.toISOString().slice(0,10);
+  }
+  renderReport();
+}
+
+// Per-branch revenue report
+let branchReportData=[];
+function renderBranchReport(){
+  const r=periodRange(reportPeriod,reportCustomFrom,reportCustomTo);
+  const inRange=(r.from||r.to)?ordersInRange(r.from,r.to):orders.slice();
+  const groups={};
+  inRange.forEach(o=>{
+    if(!o.customer)return;
+    const k=orderCustomerKey(o);
+    if(!groups[k]){
+      groups[k]={
+        key:k,
+        name:getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer,
+        city:o.customerCity||o.shipToCity||'',
+        state:o.customerState||o.shipToState||'',
+        orderCount:0,revenue:0,unitsShipped:0,commission:0,products:{}
+      };
+    }
+    const g=groups[k];
+    g.orderCount++;
+    g.revenue+=(o.orderTotal||0);
+    (o.items||[]).forEach(i=>{
+      g.unitsShipped+=(i.qtyShipped||0);
+      const rate=i.commissionPct??getCommission(i.productNo);
+      if(rate!=null)g.commission+=((i.total||0)*(rate/100));
+      if(i.productNo){g.products[i.productNo]=(g.products[i.productNo]||0)+(i.total||0);}
+    });
+  });
+  const list=Object.values(groups).map(g=>{
+    const topProd=Object.entries(g.products).sort((a,b)=>b[1]-a[1])[0];
+    g.topProduct=topProd?topProd[0]:'';
+    return g;
+  }).sort((a,b)=>b.revenue-a.revenue);
+  branchReportData=list;
+
+  // controls
+  document.getElementById('report-controls').innerHTML=periodSelectorHTML();
+  // body
+  const body=document.getElementById('report-body');
+  if(!list.length){body.innerHTML='<div class="empty">No orders in this period.</div>';return;}
+  const totals=list.reduce((a,g)=>{a.orders+=g.orderCount;a.revenue+=g.revenue;a.units+=g.unitsShipped;a.commission+=g.commission;return a;},{orders:0,revenue:0,units:0,commission:0});
+  body.innerHTML=`<div class="report-print-header">
+    <div style="font-size:18pt;font-weight:700">D'Ewart Representatives — Per-Branch Revenue</div>
+    <div style="font-size:10pt;color:#444;margin-top:4px">Period: ${r.label}${r.fromStr?' ('+r.fromStr+' to '+r.toStr+')':''}</div>
+  </div>
+  <div style="font-size:13px;color:#666;margin-bottom:10px">${list.length} branch${list.length!==1?'es':''} · Period: <strong>${r.label}</strong></div>
+  <table>
+    <thead><tr>
+      <th>Branch</th><th>Location</th>
+      <th style="text-align:right">Orders</th>
+      <th style="text-align:right">Units shipped</th>
+      <th style="text-align:right">Revenue</th>
+      <th style="text-align:right">Commission</th>
+      <th>Top product</th>
+    </tr></thead>
+    <tbody>
+      ${list.map(g=>`<tr>
+        <td style="font-weight:500">${g.name.replace(/</g,'&lt;')}</td>
+        <td style="color:#666;font-size:12px">${[g.city,g.state].filter(Boolean).join(', ')||'—'}</td>
+        <td style="text-align:right">${g.orderCount}</td>
+        <td style="text-align:right">${g.unitsShipped.toLocaleString()}</td>
+        <td style="text-align:right;font-weight:600">${fmt(g.revenue)}</td>
+        <td style="text-align:right;color:#0F6E56">${g.commission?fmt(g.commission):'—'}</td>
+        <td style="font-family:monospace;font-size:11px;color:#666">${g.topProduct||'—'}</td>
+      </tr>`).join('')}
+      <tr style="border-top:2px solid #1a1a1a;font-weight:700">
+        <td colspan="2">TOTAL</td>
+        <td style="text-align:right">${totals.orders}</td>
+        <td style="text-align:right">${totals.units.toLocaleString()}</td>
+        <td style="text-align:right">${fmt(totals.revenue)}</td>
+        <td style="text-align:right;color:#0F6E56">${fmt(totals.commission)}</td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>`;
+}
+
+// Commission report
+let commissionReportData=[];
+function renderCommissionReport(){
+  const r=periodRange(reportPeriod,reportCustomFrom,reportCustomTo);
+  const inRange=(r.from||r.to)?ordersInRange(r.from,r.to):orders.slice();
+
+  const groupExtra=`<label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-left:14px">Group by:</label>
+    <select id="rpt-groupby" onchange="reportGroupBy=this.value;renderReport()" style="height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px">
+      <option value="branch" ${reportGroupBy==='branch'?'selected':''}>Branch</option>
+      <option value="product" ${reportGroupBy==='product'?'selected':''}>Product</option>
+      <option value="month" ${reportGroupBy==='month'?'selected':''}>Month</option>
+    </select>`;
+  document.getElementById('report-controls').innerHTML=periodSelectorHTML(groupExtra);
+
+  // Compute commission rows
+  const groups={};
+  let grandRevenue=0,grandCommission=0,grandOrders=new Set();
+  inRange.forEach(o=>{
+    (o.items||[]).forEach(i=>{
+      const rate=i.commissionPct??getCommission(i.productNo);
+      if(rate==null)return;
+      const lineRev=i.total||0;
+      const lineComm=lineRev*(rate/100);
+      grandRevenue+=lineRev;
+      grandCommission+=lineComm;
+      grandOrders.add(o.id);
+      let key,label;
+      if(reportGroupBy==='branch'){
+        key=orderCustomerKey(o);
+        label=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'(no customer)';
+        const loc=[o.customerCity||o.shipToCity,o.customerState||o.shipToState].filter(Boolean).join(', ');
+        if(loc)label+=' — '+loc;
+      }else if(reportGroupBy==='product'){
+        key=i.productNo||'(no product)';
+        label=key;
+      }else{ // month
+        const d=parseDate(o.orderDate);
+        if(!d)return;
+        key=d.slice(0,7);
+        label=key;
+      }
+      if(!groups[key])groups[key]={label,revenue:0,commission:0,orders:new Set(),units:0};
+      groups[key].revenue+=lineRev;
+      groups[key].commission+=lineComm;
+      groups[key].orders.add(o.id);
+      groups[key].units+=(i.qtyShipped||0);
+    });
+  });
+  const list=Object.entries(groups).map(([key,g])=>({key,label:g.label,revenue:g.revenue,commission:g.commission,orderCount:g.orders.size,units:g.units}));
+  if(reportGroupBy==='month'){list.sort((a,b)=>a.key>b.key?1:-1);}
+  else{list.sort((a,b)=>b.commission-a.commission);}
+  commissionReportData=list;
+
+  const body=document.getElementById('report-body');
+  if(!list.length){body.innerHTML='<div class="empty">No commission data in this period. Make sure commission rates are configured for your products.</div>';return;}
+  const groupHdr={branch:'Branch',product:'Product',month:'Month'}[reportGroupBy];
+  body.innerHTML=`<div class="report-print-header">
+    <div style="font-size:18pt;font-weight:700">D'Ewart Representatives — Commission Report</div>
+    <div style="font-size:10pt;color:#444;margin-top:4px">Period: ${r.label}${r.fromStr?' ('+r.fromStr+' to '+r.toStr+')':''} · Grouped by: ${groupHdr}</div>
+  </div>
+  <div style="display:flex;gap:24px;margin-bottom:14px;padding:12px 14px;background:#E8F5E9;border-radius:8px">
+    <div><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em">Total commission</div><div style="font-size:22px;font-weight:700;color:#0F6E56">${fmt(grandCommission)}</div></div>
+    <div><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em">Revenue base</div><div style="font-size:18px;font-weight:600">${fmt(grandRevenue)}</div></div>
+    <div><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em">Orders</div><div style="font-size:18px;font-weight:600">${grandOrders.size}</div></div>
+    <div><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em">Effective rate</div><div style="font-size:18px;font-weight:600">${grandRevenue>0?(grandCommission/grandRevenue*100).toFixed(2)+'%':'—'}</div></div>
+  </div>
+  <table><thead><tr>
+    <th>${groupHdr}</th>
+    <th style="text-align:right">Orders</th>
+    <th style="text-align:right">Units</th>
+    <th style="text-align:right">Revenue</th>
+    <th style="text-align:right">Commission</th>
+    <th style="text-align:right">% of total</th>
+  </tr></thead><tbody>
+    ${list.map(g=>`<tr>
+      <td style="font-weight:500">${g.label.replace(/</g,'&lt;')}</td>
+      <td style="text-align:right">${g.orderCount}</td>
+      <td style="text-align:right">${g.units.toLocaleString()}</td>
+      <td style="text-align:right">${fmt(g.revenue)}</td>
+      <td style="text-align:right;font-weight:600;color:#0F6E56">${fmt(g.commission)}</td>
+      <td style="text-align:right;color:#888;font-size:12px">${grandCommission>0?(g.commission/grandCommission*100).toFixed(1)+'%':'—'}</td>
+    </tr>`).join('')}
+    <tr style="border-top:2px solid #1a1a1a;font-weight:700">
+      <td>TOTAL</td>
+      <td style="text-align:right">${grandOrders.size}</td>
+      <td></td>
+      <td style="text-align:right">${fmt(grandRevenue)}</td>
+      <td style="text-align:right;color:#0F6E56">${fmt(grandCommission)}</td>
+      <td></td>
+    </tr>
+  </tbody></table>`;
+}
+
+// Aging report
+let agingReportData=[];
+function renderAgingReport(){
+  document.getElementById('report-controls').innerHTML=`
+    <div style="font-size:13px;color:#666">Open orders bucketed by age. Backorders show units still owed.</div>
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button onclick="window.print()" style="padding:6px 14px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">🖨 Print / Save PDF</button>
+      <button onclick="exportCurrentReport()" style="padding:6px 14px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px">⬇ Export CSV</button>
+    </div>`;
+
+  const today=new Date();today.setHours(0,0,0,0);
+  const open=orders.filter(o=>{const s=getStatus(o);return s!=='shipped';});
+  // Compute age (days since orderDate)
+  const rows=open.map(o=>{
+    const od=parseDate(o.orderDate);
+    const ageDays=od?Math.floor((today-new Date(od+'T12:00:00'))/86400000):null;
+    const sd=parseDate(o.scheduledShip);
+    const overdueDays=sd?Math.floor((today-new Date(sd+'T12:00:00'))/86400000):null;
+    const tBal=(o.items||[]).reduce((a,i)=>a+(i.qtyBalance||0),0);
+    const tShp=(o.items||[]).reduce((a,i)=>a+(i.qtyShipped||0),0);
+    return {o,ageDays,overdueDays,balance:tBal,shipped:tShp};
+  });
+  // Bucket
+  const buckets={'0-30':[], '31-60':[], '61-90':[], '90+':[]};
+  rows.forEach(r=>{
+    const a=r.ageDays==null?-1:r.ageDays;
+    if(a<=30)buckets['0-30'].push(r);
+    else if(a<=60)buckets['31-60'].push(r);
+    else if(a<=90)buckets['61-90'].push(r);
+    else buckets['90+'].push(r);
+  });
+  // Sort within each bucket by age descending (oldest first)
+  Object.keys(buckets).forEach(b=>buckets[b].sort((a,b)=>(b.ageDays||0)-(a.ageDays||0)));
+  agingReportData=rows;
+
+  const body=document.getElementById('report-body');
+  if(!rows.length){body.innerHTML='<div class="empty">✓ No open orders — everything is shipped!</div>';return;}
+  const bucketSummary=Object.entries(buckets).map(([k,v])=>({label:k,count:v.length,backorder:v.reduce((a,r)=>a+r.balance,0),value:v.reduce((a,r)=>a+(r.o.orderTotal||0),0)}));
+  body.innerHTML=`<div class="report-print-header">
+    <div style="font-size:18pt;font-weight:700">D'Ewart Representatives — Aging Report</div>
+    <div style="font-size:10pt;color:#444;margin-top:4px">As of ${today.toLocaleDateString()} · Open orders only</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
+    ${bucketSummary.map(b=>{
+      const isOld=b.label==='61-90'||b.label==='90+';
+      const bg=b.label==='90+'?'#FFEBEE':b.label==='61-90'?'#FFF3E0':b.label==='31-60'?'#FFFDE7':'#F5F5F5';
+      const fg=b.label==='90+'?'#C62828':b.label==='61-90'?'#E65100':'#1a1a1a';
+      return `<div style="background:${bg};border-radius:8px;padding:14px">
+        <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em;font-weight:600">${b.label} days</div>
+        <div style="font-size:22px;font-weight:700;color:${fg};margin-top:4px">${b.count}</div>
+        <div style="font-size:11px;color:#666;margin-top:2px">order${b.count!==1?'s':''} · ${fmt(b.value)}</div>
+        ${b.backorder>0?`<div style="font-size:11px;color:${fg};margin-top:2px;font-weight:600">${b.backorder.toLocaleString()} units owed</div>`:''}
+      </div>`;
+    }).join('')}
+  </div>
+  ${Object.entries(buckets).filter(([,v])=>v.length).map(([bucket,bucketRows])=>{
+    return `<div style="margin-bottom:1.5rem">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:${bucket==='90+'?'#C62828':bucket==='61-90'?'#E65100':'#1a1a1a'}">${bucket} days (${bucketRows.length})</div>
+      <table><thead><tr>
+        <th>Age</th><th>SO #</th><th>Order date</th><th>Customer</th><th>Branch</th><th>Status</th>
+        <th style="text-align:right">Backorder qty</th><th style="text-align:right">Order total</th><th>Sched ship</th>
+      </tr></thead><tbody>
+        ${bucketRows.map(r=>{
+          const o=r.o;
+          const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'—';
+          const loc=[o.customerCity||o.shipToCity,o.customerState||o.shipToState].filter(Boolean).join(', ');
+          return `<tr>
+            <td style="font-weight:600;color:${r.ageDays>=90?'#C62828':r.ageDays>=60?'#E65100':'#666'}">${r.ageDays!=null?r.ageDays+'d':'—'}</td>
+            <td style="font-family:monospace;font-weight:600">${o.salesOrderNo||'—'}</td>
+            <td style="color:#666">${fmtDate(o.orderDate)}</td>
+            <td>${cn.replace(/</g,'&lt;')}</td>
+            <td style="color:#666;font-size:12px">${loc||'—'}</td>
+            <td>${statusBadge(o)}</td>
+            <td style="text-align:right;color:${r.balance>0?'#4527A0':'#aaa'};font-weight:${r.balance>0?600:400}">${r.balance>0?r.balance.toLocaleString():'—'}</td>
+            <td style="text-align:right;font-weight:600">${fmt(o.orderTotal)}</td>
+            <td>${fmtDate(o.scheduledShip)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>
+    </div>`;
+  }).join('')}`;
+}
+
+// CSV export
+function exportCurrentReport(){
+  let rows=[],filename='report.csv';
+  if(activeReport==='branch'){
+    rows=[['Branch','City','State','Orders','Units shipped','Revenue','Commission','Top product']];
+    branchReportData.forEach(g=>rows.push([g.name,g.city,g.state,g.orderCount,g.unitsShipped,g.revenue.toFixed(2),g.commission.toFixed(2),g.topProduct||'']));
+    filename='branch-revenue-'+new Date().toISOString().slice(0,10)+'.csv';
+  }else if(activeReport==='commission'){
+    rows=[[reportGroupBy.charAt(0).toUpperCase()+reportGroupBy.slice(1),'Orders','Units','Revenue','Commission']];
+    commissionReportData.forEach(g=>rows.push([g.label,g.orderCount,g.units,g.revenue.toFixed(2),g.commission.toFixed(2)]));
+    filename='commission-'+reportGroupBy+'-'+new Date().toISOString().slice(0,10)+'.csv';
+  }else if(activeReport==='aging'){
+    rows=[['Age (days)','SO #','Order date','Customer','City','State','Status','Backorder qty','Order total','Scheduled ship']];
+    agingReportData.forEach(r=>{
+      const o=r.o;
+      const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'';
+      rows.push([r.ageDays??'',o.salesOrderNo||'',fmtDate(o.orderDate)||'',cn,o.customerCity||o.shipToCity||'',o.customerState||o.shipToState||'',getStatus(o),r.balance,(o.orderTotal||0).toFixed(2),fmtDate(o.scheduledShip)||'']);
+    });
+    filename='aging-'+new Date().toISOString().slice(0,10)+'.csv';
+  }
+  const csv=rows.map(r=>r.map(cell=>{
+    const s=String(cell??'');
+    return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+  }).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+
+function addInvoiceFromDetail(orderId){
+  switchTab('upload');
+  setTimeout(()=>showManualInvoiceForm(orderId),100);
+}
+
 function switchTab(t){
-  document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['dashboard','orders','upload','customers','commission'][i]===t));
+  const tabOrder=['dashboard','orders','upload','reports','customers','commission'];
+  document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',tabOrder[i]===t));
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+t).classList.add('active');
   if(t==='dashboard')renderDashboard();
-  if(t==='orders')renderOrders();
+  if(t==='orders'){populateBranchFilter();renderOrders();}
+  if(t==='reports')renderReport();
   if(t==='customers')renderCustomers();
   if(t==='commission')renderCommissionRates();
 }
@@ -1863,6 +2503,9 @@ if(!accessToken){
   document.getElementById('tab-dashboard').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
   document.getElementById('tab-orders').innerHTML='<div style="text-align:center;padding:3rem;color:#888"><div style="font-size:32px;margin-bottom:12px">🔒</div><div style="font-size:16px;font-weight:600;margin-bottom:6px">Sign in required</div><div style="font-size:13px">Please sign in with Microsoft to load your orders from OneDrive</div></div>';
 } else {
+  populateBranchFilter();
+  const savedBranch=loadOrderFilterPrefs();
+  if(savedBranch){const sel=document.getElementById('branch-filter');if(sel)sel.value=savedBranch;}
   renderDashboard();renderOrders();
 }
 </script>
