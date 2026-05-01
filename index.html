@@ -150,6 +150,10 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
       <div class="metric"><div class="metric-label">Total units sold</div><div class="metric-value" style="color:#185FA5" id="m-units">0</div></div>
       <div class="metric"><div class="metric-label">Commission earned</div><div class="metric-value" style="color:#0F6E56" id="m-commission">$0</div></div>
     </div>
+    <div class="card">
+      <div class="card-title">Revenue by product line</div>
+      <div id="line-breakdown"><div class="empty">Classify products in the Commission Rates tab to see this breakdown</div></div>
+    </div>
     <div class="dash-grid">
       <div class="card">
         <div class="card-title">Revenue by customer</div>
@@ -214,6 +218,13 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
     <div class="search-row">
       <input type="text" id="search-input" placeholder="Search by customer, SO#, PO#, or product..." oninput="onSearchInput()">
       <select id="branch-filter" onchange="onBranchFilterChange()" style="width:240px"><option value="">All branches</option></select>
+      <select id="line-filter" onchange="onLineFilterChange()" style="width:130px">
+        <option value="">All lines</option>
+        <option value="molded">Molded only</option>
+        <option value="aerial">Aerial only</option>
+        <option value="mixed">Mixed only</option>
+        <option value="unclassified">Unclassified</option>
+      </select>
       <select id="sort-select" onchange="onSortChange()">
         <option value="date-desc">Newest first</option>
         <option value="date-asc">Oldest first</option>
@@ -270,13 +281,39 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
   <!-- COMMISSION -->
   <div id="tab-commission" class="section">
     <div class="card">
-      <div class="card-title">Default commission rates by product</div>
-      <div style="font-size:13px;color:#666;margin-bottom:1rem">Set a default commission % for each product number. This rate will auto-apply when that product appears on an imported order. You can override it per line item in the order detail.</div>
-      <div style="display:flex;gap:8px;margin-bottom:1rem">
-        <input type="text" id="cr-product" placeholder="Product # (e.g. HPI-15VTP)" style="flex:1;height:34px;border-radius:8px;border:1px solid #d0d0d0;padding:0 10px;font-size:13px">
+      <div class="card-title">Bulk classify products by line</div>
+      <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:1.6">Apply a product line (Molded / Aerial) to every product whose number matches a pattern. Useful for quickly tagging dozens of related SKUs in one shot. Manual overrides in the table below take precedence and won't be touched.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <select id="bc-mode" style="height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+          <option value="startsWith">Product # starts with</option>
+          <option value="contains">Product # contains</option>
+          <option value="regex">Matches regex</option>
+        </select>
+        <input type="text" id="bc-pattern" placeholder="e.g. HPI or 15VTP" style="flex:1;min-width:140px;height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;font-family:monospace">
+        <span style="font-size:12px;color:#888">→</span>
+        <select id="bc-line" style="height:32px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px">
+          <option value="molded">Set as Molded</option>
+          <option value="aerial">Set as Aerial</option>
+          <option value="clear">Clear classification</option>
+        </select>
+        <button onclick="runBulkClassify()" style="padding:0 14px;height:32px;border-radius:6px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Apply</button>
+      </div>
+      <div id="bc-status" style="font-size:12px;color:#666"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Products — line, commission rate, and stats</div>
+      <div style="font-size:13px;color:#666;margin-bottom:1rem;line-height:1.6">Set each product's <strong>line</strong> (Molded / Aerial) and <strong>commission %</strong>. Both apply automatically to imported orders and feed the dashboard, filters, and reports. You can override commission per-line on a specific order from the order detail.</div>
+      <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+        <input type="text" id="cr-product" placeholder="Product # (e.g. HPI-15VTP)" style="flex:1;min-width:140px;height:34px;border-radius:8px;border:1px solid #d0d0d0;padding:0 10px;font-size:13px">
+        <select id="cr-line" style="width:130px;height:34px;border-radius:8px;border:1px solid #d0d0d0;padding:0 10px;font-size:13px">
+          <option value="">Line —</option>
+          <option value="molded">Molded</option>
+          <option value="aerial">Aerial</option>
+        </select>
         <input type="number" id="cr-rate" placeholder="Rate %" step="0.1" min="0" max="100" style="width:100px;height:34px;border-radius:8px;border:1px solid #d0d0d0;padding:0 10px;font-size:13px">
         <button onclick="addCommissionRate()" style="padding:0 16px;height:34px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;font-weight:500">Add</button>
       </div>
+      <div id="commission-summary" style="font-size:12px;color:#666;margin-bottom:8px"></div>
       <div id="commission-list"></div>
     </div>
   </div>
@@ -330,6 +367,7 @@ let orders=[];
 let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
 let commissionRates=JSON.parse(localStorage.getItem('dewart_commission_rates')||'{}');
+let productLines=JSON.parse(localStorage.getItem('dewart_product_lines')||'{}');
 let customerAliases=JSON.parse(localStorage.getItem('dewart_customer_aliases')||'{}');
 let customerNotDuplicates=JSON.parse(localStorage.getItem('dewart_customer_not_duplicates')||'{}');
 let activeFilter='all';
@@ -407,6 +445,7 @@ async function loadFromOneDrive(){
     if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');populateBranchFilter();const savedBranch=loadOrderFilterPrefs();if(savedBranch){const sel=document.getElementById('branch-filter');if(sel)sel.value=savedBranch;}renderDashboard();renderOrders();}
     await loadAliasesFromOneDrive();
     await loadNotDuplicatesFromOneDrive();
+    await loadProductLinesFromOneDrive();
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
     else{
@@ -431,6 +470,25 @@ async function saveAliasesToOneDrive(){
   try{
     await graphFetch('/me/drive/root:/Sales Tracker/customer-aliases.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerAliases)});
   }catch(e){console.error('Failed to save aliases to OneDrive:',e);}
+}
+
+async function saveProductLinesToOneDrive(){
+  if(!accessToken)return;
+  try{
+    await graphFetch('/me/drive/root:/Sales Tracker/product-lines.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(productLines)});
+  }catch(e){console.error('Failed to save product lines to OneDrive:',e);}
+}
+
+async function loadProductLinesFromOneDrive(){
+  try{
+    const data=await graphFetch('/me/drive/root:/Sales Tracker/product-lines.json:/content');
+    if(data&&typeof data==='object'){
+      productLines=data;
+      localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
+    }
+  }catch(e){
+    if(!e.message.includes('itemNotFound'))console.error('Failed to load product lines from OneDrive:',e);
+  }
 }
 
 async function saveNotDuplicatesToOneDrive(){
@@ -908,7 +966,52 @@ function renderDashboard(){
     },0));
   },0);
   document.getElementById('m-commission').textContent=fmt(totalCommission);
-  
+
+  // Revenue by product line breakdown
+  const lineEl=document.getElementById('line-breakdown');
+  if(lineEl){
+    const breakdown={molded:{revenue:0,commission:0,units:0,orders:new Set()},aerial:{revenue:0,commission:0,units:0,orders:new Set()},unclassified:{revenue:0,commission:0,units:0,orders:new Set()}};
+    dashOrders.forEach(o=>{
+      (o.items||[]).forEach(i=>{
+        const l=getProductLine(i.productNo)||'unclassified';
+        breakdown[l].revenue+=(i.total||0);
+        breakdown[l].units+=(i.qtyShipped||0);
+        const rate=i.commissionPct??getCommission(i.productNo);
+        if(rate!=null)breakdown[l].commission+=((i.total||0)*(rate/100));
+        breakdown[l].orders.add(o.id);
+      });
+    });
+    const totalRev=breakdown.molded.revenue+breakdown.aerial.revenue+breakdown.unclassified.revenue;
+    if(totalRev===0||(breakdown.molded.revenue===0&&breakdown.aerial.revenue===0)){
+      lineEl.innerHTML='<div class="empty" style="padding:1.5rem">No products classified yet — open the Commission Rates tab to tag products as Molded or Aerial.</div>';
+    }else{
+      const cardFor=(label,key,bg,fg)=>{
+        const d=breakdown[key];
+        const pct=totalRev>0?Math.round(d.revenue/totalRev*100):0;
+        return `<div style="background:${bg};border-radius:10px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+            <div style="font-size:12px;font-weight:700;color:${fg};text-transform:uppercase;letter-spacing:.04em">${label}</div>
+            <div style="font-size:11px;color:#666;font-weight:600">${pct}% of total</div>
+          </div>
+          <div style="font-size:24px;font-weight:700;color:${fg}">${fmt(d.revenue)}</div>
+          <div style="font-size:11px;color:#666;margin-top:6px;line-height:1.6">
+            ${d.orders.size} order${d.orders.size!==1?'s':''} · ${d.units.toLocaleString()} units<br>
+            <span style="color:#0F6E56;font-weight:600">Commission: ${fmt(d.commission)}</span>
+          </div>
+          <div style="height:6px;background:rgba(0,0,0,0.06);border-radius:3px;margin-top:8px;overflow:hidden">
+            <div style="height:100%;background:${fg};width:${pct}%"></div>
+          </div>
+        </div>`;
+      };
+      const showUnclassified=breakdown.unclassified.revenue>0;
+      lineEl.innerHTML=`<div style="display:grid;grid-template-columns:repeat(${showUnclassified?3:2},1fr);gap:12px">
+        ${cardFor('Molded','molded','#E3F2FD','#1565C0')}
+        ${cardFor('Aerial','aerial','#FFF3E0','#E65100')}
+        ${showUnclassified?cardFor('Unclassified','unclassified','#f5f5f5','#666'):''}
+      </div>${showUnclassified?'<div style="font-size:11px;color:#888;margin-top:10px;font-style:italic">Tip: '+breakdown.unclassified.orders.size+' order'+(breakdown.unclassified.orders.size!==1?'s':'')+' have unclassified products. Open the Commission Rates tab and use Bulk Classify to tag them.</div>':''}`;
+    }
+  }
+
   // Monthly revenue trend — variable length (6/12/24 months)
   const now=new Date();
   const monthData=[];
@@ -1107,11 +1210,13 @@ function renderOrders(){
   const q=(document.getElementById('search-input')?.value||'').toLowerCase();
   const sort=document.getElementById('sort-select')?.value||'date-desc';
   const branchFilterKey=document.getElementById('branch-filter')?.value||'';
+  const lineFilter=document.getElementById('line-filter')?.value||'';
   let filtered=orders.filter(o=>{
     const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'').toLowerCase().includes(q)||(o.customerCity||'').toLowerCase().includes(q)||(o.customerState||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
     const matchF=activeFilter==='all'||getStatus(o)===activeFilter;
     const matchB=!branchFilterKey||orderCustomerKey(o)===branchFilterKey;
-    return matchQ&&matchF&&matchB;
+    const matchL=!lineFilter||getOrderLine(o)===lineFilter;
+    return matchQ&&matchF&&matchB&&matchL;
   });
   // Precompute branch metadata per order for branch sorting
   const branchTotals={};
@@ -1162,12 +1267,13 @@ function renderOrders(){
   if(!filtered.length){el.innerHTML='<div class="empty">'+(orders.length?'No matching orders':'No orders yet — use Import PDF to get started')+'</div>';return;}
 
   const isBranchSort=sort.startsWith('branch');
-  const colspan=12;
+  const colspan=13;
   let lastBranchKey=null;
   const rows=filtered.map(o=>{
     const tOrd=o.items?.reduce((a,i)=>a+(i.qty||0),0)||0;
     const tShp=o.items?.reduce((a,i)=>a+(i.qtyShipped||0),0)||0;
     const tBal=o.items?.reduce((a,i)=>a+(i.qtyBalance||0),0)||0;
+    const ol=getOrderLine(o);
     let headerRow='';
     if(isBranchSort){
       const bk=orderCustomerKey(o);
@@ -1192,6 +1298,7 @@ function renderOrders(){
       <td style="color:#888">${fmtDate(o.orderDate)}</td>
       <td>${o.customer?(function(){const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState);return cn!==o.customer?`<span title="On PDF: ${o.customer.replace(/"/g,'&quot;')}">${cn}</span>`:cn;})():'—'}</td>
       <td style="color:#888;white-space:nowrap">${(o.shipToCity||o.customerCity)&&(o.shipToState||o.customerState)?(o.shipToCity||o.customerCity)+', '+(o.shipToState||o.customerState):(o.shipToCity||o.customerCity||o.shipToState||o.customerState)||'—'}</td>
+      <td>${lineBadge(ol)}</td>
       <td style="color:#888;font-size:11px">${(o.items||[]).length===0?'—':(o.items.length===1?o.items[0].productNo||'—':o.items.map(i=>i.productNo).filter(Boolean).slice(0,3).join(', ')+(o.items.length>3?` +${o.items.length-3}`:''))}</td>
       <td>${tOrd.toLocaleString()}</td>
       <td style="color:#2E7D32;font-weight:${tShp>0?600:400}">${tShp>0?tShp.toLocaleString():'—'}</td>
@@ -1201,7 +1308,7 @@ function renderOrders(){
       <td>${statusBadge(o)}</td>
     </tr>`;
   }).join('');
-  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>Ship to</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+  el.innerHTML=`<table><thead><tr><th>SO #</th><th>Customer PO #</th><th>Date</th><th>Customer</th><th>Ship to</th><th>Line</th><th>Product</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Total</th><th>Sched ship</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function showDetail(id){
@@ -1212,7 +1319,7 @@ function showDetail(id){
   document.getElementById('order-detail').innerHTML=`<div class="detail-panel">
     <button class="close-btn" onclick="document.getElementById('order-detail').innerHTML=''">×</button>
     <div style="font-size:15px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:10px">
-      Sales Order ${o.salesOrderNo||'—'} &nbsp;${statusBadge(o)}
+      Sales Order ${o.salesOrderNo||'—'} &nbsp;${statusBadge(o)}&nbsp;${lineBadge(getOrderLine(o))}
       <button onclick="addInvoiceFromDetail('${o.id}')" style="margin-left:auto;padding:4px 12px;border-radius:8px;border:1px solid #2E7D32;background:#fff;color:#2E7D32;cursor:pointer;font-size:12px;font-weight:500">+ Add invoice</button>
       <button onclick="showEditForm('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px;font-weight:500">Edit</button>
       <button onclick="deleteOrder('${o.id}')" style="padding:4px 12px;border-radius:8px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:12px;font-weight:500;color:#C62828">Delete</button>
@@ -1235,10 +1342,11 @@ function showDetail(id){
       <div style="font-size:11px;color:#888">Click any field to edit · Add or delete line items below</div>
       <button onclick="addLineItem('${o.id}')" style="padding:3px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:11px;font-weight:500">+ Add line</button>
     </div>
-    <table class="items-tbl"><thead><tr><th>Line</th><th>Product #</th><th>Description</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Unit $</th><th>Total</th><th>Comm %</th><th>Comm $</th><th></th></tr></thead>
+    <table class="items-tbl"><thead><tr><th>Line</th><th>Product #</th><th>Line type</th><th>Description</th><th>Ordered</th><th>Shipped</th><th>Balance</th><th>Unit $</th><th>Total</th><th>Comm %</th><th>Comm $</th><th></th></tr></thead>
     <tbody>${(o.items||[]).map((it,idx)=>`<tr>
       <td><input type="text" value="${it.lineNo||''}" style="width:45px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent" onchange="updateLineItem('${o.id}',${idx},'lineNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
       <td><input type="text" value="${it.productNo||''}" style="width:100px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;font-family:monospace;background:transparent" onchange="updateLineItem('${o.id}',${idx},'productNo',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
+      <td>${lineBadge(getProductLine(it.productNo)||'unclassified')}</td>
       <td><input type="text" value="${(it.description||'').replace(/"/g,'&quot;')}" style="width:100%;min-width:140px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;color:#888;background:transparent" onchange="updateLineItem('${o.id}',${idx},'description',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
       <td><input type="number" value="${it.qty||0}" style="width:60px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right" onchange="updateLineItem('${o.id}',${idx},'qty',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
       <td><input type="number" value="${it.qtyShipped||0}" style="width:60px;height:24px;border-radius:4px;border:1px solid #eee;padding:0 4px;font-size:11px;background:transparent;text-align:right;color:#2E7D32;font-weight:600" onchange="updateLineItem('${o.id}',${idx},'qtyShipped',this.value)" onfocus="this.style.background='#fff';this.style.border='1px solid #d0d0d0'" onblur="this.style.background='transparent';this.style.border='1px solid #eee'"></td>
@@ -1450,14 +1558,25 @@ function setProductMode(mode){
 
 function addCommissionRate(){
   const product=document.getElementById('cr-product').value.trim().toUpperCase();
-  const rate=parseFloat(document.getElementById('cr-rate').value);
+  const rateRaw=document.getElementById('cr-rate').value.trim();
+  const line=document.getElementById('cr-line').value;
   if(!product){alert('Please enter a product number.');return;}
-  if(isNaN(rate)||rate<0||rate>100){alert('Please enter a valid rate between 0 and 100.');return;}
-  commissionRates[product]=rate;
+  if(rateRaw){
+    const rate=parseFloat(rateRaw);
+    if(isNaN(rate)||rate<0||rate>100){alert('Rate must be between 0 and 100.');return;}
+    commissionRates[product]=rate;
+  }
+  if(line==='molded'||line==='aerial'){productLines[product]=line;}
+  if(!rateRaw&&!line){alert('Enter at least a rate or a line classification.');return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
+  saveProductLinesToOneDrive();
   document.getElementById('cr-product').value='';
   document.getElementById('cr-rate').value='';
+  document.getElementById('cr-line').value='';
   renderCommissionRates();
+  renderDashboard();
+  renderOrders();
 }
 
 function deleteCommissionRate(product){
@@ -1481,12 +1600,23 @@ function renderCommissionRates(){
     productStats[p].totalValue+=(it.total||0);
     if(!productStats[p].description&&it.description)productStats[p].description=it.description;
   }));
-  // Combine products that have rates OR appear in orders
-  const allProducts=new Set([...Object.keys(commissionRates),...orderProducts]);
+  // Combine products that have rates OR are line-classified OR appear in orders
+  const allProducts=new Set([...Object.keys(commissionRates),...Object.keys(productLines),...orderProducts]);
   const entries=[...allProducts].sort();
+
+  // Summary stats
+  const sumEl=document.getElementById('commission-summary');
+  if(sumEl){
+    let molded=0,aerial=0,unclassified=0;
+    entries.forEach(p=>{const l=productLines[p];if(l==='molded')molded++;else if(l==='aerial')aerial++;else unclassified++;});
+    const pct=entries.length?Math.round((molded+aerial)/entries.length*100):0;
+    sumEl.innerHTML=`<strong>${entries.length}</strong> total products · <span style="color:#1565C0">${molded} Molded</span> · <span style="color:#E65100">${aerial} Aerial</span> · <span style="color:#888">${unclassified} unclassified</span> (${pct}% classified)`;
+  }
+
   if(!entries.length){el.innerHTML='<div class="empty">No products yet — add a product number above or import an order to see products here</div>';return;}
   el.innerHTML=`<table><thead><tr>
     <th>Product #</th>
+    <th>Line</th>
     <th>Description</th>
     <th>Orders</th>
     <th>Commission %</th>
@@ -1496,6 +1626,7 @@ function renderCommissionRates(){
   <tbody>${entries.map(p=>{
     const rate=commissionRates[p];
     const hasRate=rate!==undefined;
+    const line=productLines[p]||'';
     const stats=productStats[p]||{description:'',orderCount:0};
     const openTotal=orders.filter(o=>getStatus(o)!=='shipped').reduce((sum,o)=>{
       const item=o.items?.find(i=>i.productNo?.toUpperCase()===p);
@@ -1503,15 +1634,50 @@ function renderCommissionRates(){
     },0);
     return`<tr>
       <td style="font-family:monospace;font-weight:600">${p}</td>
-      <td style="font-size:12px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${stats.description||''}">${stats.description?stats.description.slice(0,50)+(stats.description.length>50?'…':''):'—'}</td>
+      <td>
+        <select onchange="setLineInline('${p}',this.value)" style="width:110px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:12px;background:${line==='molded'?'#E3F2FD':line==='aerial'?'#FFF3E0':'#fff'};color:${line==='molded'?'#1565C0':line==='aerial'?'#E65100':'#888'};font-weight:${line?600:400}">
+          <option value="" ${!line?'selected':''}>—</option>
+          <option value="molded" ${line==='molded'?'selected':''}>Molded</option>
+          <option value="aerial" ${line==='aerial'?'selected':''}>Aerial</option>
+        </select>
+      </td>
+      <td style="font-size:12px;color:#888;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${stats.description||''}">${stats.description?stats.description.slice(0,50)+(stats.description.length>50?'…':''):'—'}</td>
       <td style="color:#888">${stats.orderCount||'—'}</td>
       <td>
         <input type="number" step="0.1" min="0" max="100" value="${hasRate?rate:''}" placeholder="—" style="width:70px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px;text-align:center" onchange="setRateInline('${p}',this.value)">
       </td>
       <td style="color:#0F6E56;font-weight:600">${hasRate&&openTotal>0?fmt(openTotal*(rate/100)):'—'}</td>
-      <td>${hasRate?`<button onclick="deleteCommissionRate('${p}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Clear</button>`:''}</td>
+      <td>${hasRate?`<button onclick="deleteCommissionRate('${p}')" style="padding:2px 8px;border-radius:6px;border:1px solid #ffb3b3;background:#fff5f5;cursor:pointer;font-size:11px;color:#C62828">Clear rate</button>`:''}</td>
     </tr>`;
   }).join('')}</tbody></table>`;
+}
+
+function setLineInline(product,line){
+  setProductLine(product,line);
+  saveProductLinesToOneDrive();
+  renderCommissionRates();
+  renderDashboard();
+  renderOrders();
+  if(activeReport)renderReport();
+}
+
+function runBulkClassify(){
+  const pattern=document.getElementById('bc-pattern').value.trim();
+  const mode=document.getElementById('bc-mode').value;
+  const line=document.getElementById('bc-line').value;
+  const status=document.getElementById('bc-status');
+  if(!pattern){status.innerHTML='<span style="color:#C62828">Enter a pattern first.</span>';return;}
+  const count=bulkClassifyProducts(pattern,mode,line);
+  saveProductLinesToOneDrive();
+  if(count===0){status.innerHTML='<span style="color:#E65100">No products matched that pattern.</span>';}
+  else{
+    const verb=line==='clear'?'cleared':'classified as '+line;
+    status.innerHTML=`<span style="color:#2E7D32">✓ ${count} product${count!==1?'s':''} ${verb}.</span>`;
+  }
+  document.getElementById('bc-pattern').value='';
+  renderCommissionRates();
+  renderDashboard();
+  renderOrders();
 }
 
 function setRateInline(product,val){
@@ -1897,7 +2063,117 @@ function getCommission(productNo){
   return commissionRates[productNo.toUpperCase()]??null;
 }
 
-// ---------- Filter prefs persistence + debounced search ----------
+// ---------- Product line classification ----------
+// Each product can be classified as 'molded' or 'aerial' (or unclassified).
+// productLines maps productNo (uppercase) → 'molded' | 'aerial'
+function getProductLine(productNo){
+  if(!productNo)return null;
+  return productLines[productNo.toUpperCase()]||null;
+}
+
+function setProductLine(productNo,line){
+  if(!productNo)return;
+  const key=productNo.toUpperCase();
+  if(line==='molded'||line==='aerial'){
+    productLines[key]=line;
+  }else{
+    delete productLines[key];
+  }
+  localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
+}
+
+// Determine the line classification for an entire order.
+// Returns: 'molded', 'aerial', 'mixed', or 'unclassified'
+function getOrderLine(o){
+  const lines=new Set();
+  let unclassified=0;
+  (o.items||[]).forEach(i=>{
+    const l=getProductLine(i.productNo);
+    if(l)lines.add(l);
+    else unclassified++;
+  });
+  if(lines.size===0)return 'unclassified';
+  if(lines.size===1){
+    return [...lines][0]; // 'molded' or 'aerial' (with possible some unclassified items, still primary line)
+  }
+  return 'mixed';
+}
+
+// Split an order's revenue by line. Returns {molded, aerial, unclassified}
+// Uses each item's `total` as the basis.
+function splitOrderRevenue(o){
+  const out={molded:0,aerial:0,unclassified:0};
+  (o.items||[]).forEach(i=>{
+    const l=getProductLine(i.productNo)||'unclassified';
+    out[l]+=(i.total||0);
+  });
+  return out;
+}
+
+// Same but for shipped revenue (for commission/realized calculations)
+function splitOrderShipped(o){
+  const out={molded:0,aerial:0,unclassified:0};
+  (o.items||[]).forEach(i=>{
+    const l=getProductLine(i.productNo)||'unclassified';
+    const lineRev=(i.qtyShipped||0)*(i.unitPrice||0);
+    out[l]+=lineRev;
+  });
+  return out;
+}
+
+// Same shape but for commission $
+function splitOrderCommission(o){
+  const out={molded:0,aerial:0,unclassified:0};
+  (o.items||[]).forEach(i=>{
+    const l=getProductLine(i.productNo)||'unclassified';
+    const rate=i.commissionPct??getCommission(i.productNo);
+    if(rate==null)return;
+    out[l]+=((i.total||0)*(rate/100));
+  });
+  return out;
+}
+
+// Bulk classification: apply a line to every product whose number matches a pattern.
+// pattern is a string. mode is 'startsWith' | 'contains' | 'regex'
+function bulkClassifyProducts(pattern,mode,line){
+  if(!pattern||!['molded','aerial','clear'].includes(line))return 0;
+  // Collect every product seen in any order or in commissionRates
+  const all=new Set([...Object.keys(commissionRates),...Object.keys(productLines)]);
+  orders.forEach(o=>(o.items||[]).forEach(i=>{if(i.productNo)all.add(i.productNo.toUpperCase());}));
+  const p=pattern.toUpperCase();
+  let regex=null;
+  if(mode==='regex'){
+    try{regex=new RegExp(pattern,'i');}catch(e){alert('Invalid regex: '+e.message);return 0;}
+  }
+  let count=0;
+  all.forEach(prod=>{
+    let match=false;
+    if(mode==='startsWith')match=prod.startsWith(p);
+    else if(mode==='contains')match=prod.includes(p);
+    else if(mode==='regex')match=regex.test(prod);
+    if(match){
+      if(line==='clear')delete productLines[prod];
+      else productLines[prod]=line;
+      count++;
+    }
+  });
+  localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
+  return count;
+}
+
+// Render a small line badge for an order line classification
+function lineBadge(line,extraStyle){
+  const cfg={
+    molded:{label:'Molded',bg:'#E3F2FD',fg:'#1565C0'},
+    aerial:{label:'Aerial',bg:'#FFF3E0',fg:'#E65100'},
+    mixed:{label:'Mixed',bg:'#F3E5F5',fg:'#6A1B9A'},
+    unclassified:{label:'—',bg:'#f5f5f5',fg:'#999'}
+  };
+  const c=cfg[line]||cfg.unclassified;
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;background:${c.bg};color:${c.fg};${extraStyle||''}">${c.label}</span>`;
+}
+
+
 let searchDebounceTimer=null;
 function onSearchInput(){
   clearTimeout(searchDebounceTimer);
@@ -1907,6 +2183,7 @@ function onSearchInput(){
   },220);
 }
 function onBranchFilterChange(){saveOrderFilterPrefs();renderOrders();}
+function onLineFilterChange(){saveOrderFilterPrefs();renderOrders();}
 function onSortChange(){saveOrderFilterPrefs();renderOrders();}
 
 function saveOrderFilterPrefs(){
@@ -1914,6 +2191,7 @@ function saveOrderFilterPrefs(){
     localStorage.setItem('dewart_order_prefs',JSON.stringify({
       sort:document.getElementById('sort-select')?.value||'date-desc',
       branch:document.getElementById('branch-filter')?.value||'',
+      line:document.getElementById('line-filter')?.value||'',
       filter:activeFilter||'all',
       search:document.getElementById('search-input')?.value||''
     }));
@@ -1925,13 +2203,13 @@ function loadOrderFilterPrefs(){
     const p=JSON.parse(localStorage.getItem('dewart_order_prefs')||'{}');
     if(p.sort){const s=document.getElementById('sort-select');if(s)s.value=p.sort;}
     if(p.search){const s=document.getElementById('search-input');if(s)s.value=p.search;}
+    if(p.line){const s=document.getElementById('line-filter');if(s)s.value=p.line;}
     if(p.filter&&p.filter!=='all'){
       activeFilter=p.filter;
       document.querySelectorAll('.filter-pills .pill').forEach(pill=>{
         pill.classList.toggle('active',pill.textContent.trim().toLowerCase().startsWith(p.filter));
       });
     }
-    // branch filter has to be set after population
     return p.branch||'';
   }catch(e){return '';}
 }
@@ -2212,12 +2490,17 @@ function renderBranchReport(){
         name:getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer,
         city:o.customerCity||o.shipToCity||'',
         state:o.customerState||o.shipToState||'',
-        orderCount:0,revenue:0,unitsShipped:0,commission:0,products:{}
+        orderCount:0,revenue:0,unitsShipped:0,commission:0,products:{},
+        moldedRev:0,aerialRev:0,unclassifiedRev:0
       };
     }
     const g=groups[k];
     g.orderCount++;
     g.revenue+=(o.orderTotal||0);
+    const split=splitOrderRevenue(o);
+    g.moldedRev+=split.molded;
+    g.aerialRev+=split.aerial;
+    g.unclassifiedRev+=split.unclassified;
     (o.items||[]).forEach(i=>{
       g.unitsShipped+=(i.qtyShipped||0);
       const rate=i.commissionPct??getCommission(i.productNo);
@@ -2237,7 +2520,8 @@ function renderBranchReport(){
   // body
   const body=document.getElementById('report-body');
   if(!list.length){body.innerHTML='<div class="empty">No orders in this period.</div>';return;}
-  const totals=list.reduce((a,g)=>{a.orders+=g.orderCount;a.revenue+=g.revenue;a.units+=g.unitsShipped;a.commission+=g.commission;return a;},{orders:0,revenue:0,units:0,commission:0});
+  const totals=list.reduce((a,g)=>{a.orders+=g.orderCount;a.revenue+=g.revenue;a.units+=g.unitsShipped;a.commission+=g.commission;a.molded+=g.moldedRev;a.aerial+=g.aerialRev;return a;},{orders:0,revenue:0,units:0,commission:0,molded:0,aerial:0});
+  const showLineCols=totals.molded>0||totals.aerial>0;
   body.innerHTML=`<div class="report-print-header">
     <div style="font-size:18pt;font-weight:700">D'Ewart Representatives — Per-Branch Revenue</div>
     <div style="font-size:10pt;color:#444;margin-top:4px">Period: ${r.label}${r.fromStr?' ('+r.fromStr+' to '+r.toStr+')':''}</div>
@@ -2248,6 +2532,7 @@ function renderBranchReport(){
       <th>Branch</th><th>Location</th>
       <th style="text-align:right">Orders</th>
       <th style="text-align:right">Units shipped</th>
+      ${showLineCols?'<th style="text-align:right;color:#1565C0">Molded $</th><th style="text-align:right;color:#E65100">Aerial $</th>':''}
       <th style="text-align:right">Revenue</th>
       <th style="text-align:right">Commission</th>
       <th>Top product</th>
@@ -2258,6 +2543,7 @@ function renderBranchReport(){
         <td style="color:#666;font-size:12px">${[g.city,g.state].filter(Boolean).join(', ')||'—'}</td>
         <td style="text-align:right">${g.orderCount}</td>
         <td style="text-align:right">${g.unitsShipped.toLocaleString()}</td>
+        ${showLineCols?`<td style="text-align:right;color:#1565C0">${g.moldedRev>0?fmt(g.moldedRev):'—'}</td><td style="text-align:right;color:#E65100">${g.aerialRev>0?fmt(g.aerialRev):'—'}</td>`:''}
         <td style="text-align:right;font-weight:600">${fmt(g.revenue)}</td>
         <td style="text-align:right;color:#0F6E56">${g.commission?fmt(g.commission):'—'}</td>
         <td style="font-family:monospace;font-size:11px;color:#666">${g.topProduct||'—'}</td>
@@ -2266,6 +2552,7 @@ function renderBranchReport(){
         <td colspan="2">TOTAL</td>
         <td style="text-align:right">${totals.orders}</td>
         <td style="text-align:right">${totals.units.toLocaleString()}</td>
+        ${showLineCols?`<td style="text-align:right;color:#1565C0">${fmt(totals.molded)}</td><td style="text-align:right;color:#E65100">${fmt(totals.aerial)}</td>`:''}
         <td style="text-align:right">${fmt(totals.revenue)}</td>
         <td style="text-align:right;color:#0F6E56">${fmt(totals.commission)}</td>
         <td></td>
@@ -2283,6 +2570,7 @@ function renderCommissionReport(){
   const groupExtra=`<label style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-left:14px">Group by:</label>
     <select id="rpt-groupby" onchange="reportGroupBy=this.value;renderReport()" style="height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:12px">
       <option value="branch" ${reportGroupBy==='branch'?'selected':''}>Branch</option>
+      <option value="line" ${reportGroupBy==='line'?'selected':''}>Product line</option>
       <option value="product" ${reportGroupBy==='product'?'selected':''}>Product</option>
       <option value="month" ${reportGroupBy==='month'?'selected':''}>Month</option>
     </select>`;
@@ -2306,6 +2594,9 @@ function renderCommissionReport(){
         label=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'(no customer)';
         const loc=[o.customerCity||o.shipToCity,o.customerState||o.shipToState].filter(Boolean).join(', ');
         if(loc)label+=' — '+loc;
+      }else if(reportGroupBy==='line'){
+        key=getProductLine(i.productNo)||'unclassified';
+        label=key==='molded'?'Molded':key==='aerial'?'Aerial':'Unclassified';
       }else if(reportGroupBy==='product'){
         key=i.productNo||'(no product)';
         label=key;
@@ -2329,7 +2620,7 @@ function renderCommissionReport(){
 
   const body=document.getElementById('report-body');
   if(!list.length){body.innerHTML='<div class="empty">No commission data in this period. Make sure commission rates are configured for your products.</div>';return;}
-  const groupHdr={branch:'Branch',product:'Product',month:'Month'}[reportGroupBy];
+  const groupHdr={branch:'Branch',line:'Product line',product:'Product',month:'Month'}[reportGroupBy];
   body.innerHTML=`<div class="report-print-header">
     <div style="font-size:18pt;font-weight:700">D'Ewart Representatives — Commission Report</div>
     <div style="font-size:10pt;color:#444;margin-top:4px">Period: ${r.label}${r.fromStr?' ('+r.fromStr+' to '+r.toStr+')':''} · Grouped by: ${groupHdr}</div>
@@ -2426,7 +2717,7 @@ function renderAgingReport(){
     return `<div style="margin-bottom:1.5rem">
       <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:${bucket==='90+'?'#C62828':bucket==='61-90'?'#E65100':'#1a1a1a'}">${bucket} days (${bucketRows.length})</div>
       <table><thead><tr>
-        <th>Age</th><th>SO #</th><th>Order date</th><th>Customer</th><th>Branch</th><th>Status</th>
+        <th>Age</th><th>SO #</th><th>Order date</th><th>Customer</th><th>Branch</th><th>Line</th><th>Status</th>
         <th style="text-align:right">Backorder qty</th><th style="text-align:right">Order total</th><th>Sched ship</th>
       </tr></thead><tbody>
         ${bucketRows.map(r=>{
@@ -2439,6 +2730,7 @@ function renderAgingReport(){
             <td style="color:#666">${fmtDate(o.orderDate)}</td>
             <td>${cn.replace(/</g,'&lt;')}</td>
             <td style="color:#666;font-size:12px">${loc||'—'}</td>
+            <td>${lineBadge(getOrderLine(o))}</td>
             <td>${statusBadge(o)}</td>
             <td style="text-align:right;color:${r.balance>0?'#4527A0':'#aaa'};font-weight:${r.balance>0?600:400}">${r.balance>0?r.balance.toLocaleString():'—'}</td>
             <td style="text-align:right;font-weight:600">${fmt(o.orderTotal)}</td>
@@ -2454,19 +2746,19 @@ function renderAgingReport(){
 function exportCurrentReport(){
   let rows=[],filename='report.csv';
   if(activeReport==='branch'){
-    rows=[['Branch','City','State','Orders','Units shipped','Revenue','Commission','Top product']];
-    branchReportData.forEach(g=>rows.push([g.name,g.city,g.state,g.orderCount,g.unitsShipped,g.revenue.toFixed(2),g.commission.toFixed(2),g.topProduct||'']));
+    rows=[['Branch','City','State','Orders','Units shipped','Molded $','Aerial $','Unclassified $','Revenue','Commission','Top product']];
+    branchReportData.forEach(g=>rows.push([g.name,g.city,g.state,g.orderCount,g.unitsShipped,g.moldedRev.toFixed(2),g.aerialRev.toFixed(2),g.unclassifiedRev.toFixed(2),g.revenue.toFixed(2),g.commission.toFixed(2),g.topProduct||'']));
     filename='branch-revenue-'+new Date().toISOString().slice(0,10)+'.csv';
   }else if(activeReport==='commission'){
     rows=[[reportGroupBy.charAt(0).toUpperCase()+reportGroupBy.slice(1),'Orders','Units','Revenue','Commission']];
     commissionReportData.forEach(g=>rows.push([g.label,g.orderCount,g.units,g.revenue.toFixed(2),g.commission.toFixed(2)]));
     filename='commission-'+reportGroupBy+'-'+new Date().toISOString().slice(0,10)+'.csv';
   }else if(activeReport==='aging'){
-    rows=[['Age (days)','SO #','Order date','Customer','City','State','Status','Backorder qty','Order total','Scheduled ship']];
+    rows=[['Age (days)','SO #','Order date','Customer','City','State','Line','Status','Backorder qty','Order total','Scheduled ship']];
     agingReportData.forEach(r=>{
       const o=r.o;
       const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'';
-      rows.push([r.ageDays??'',o.salesOrderNo||'',fmtDate(o.orderDate)||'',cn,o.customerCity||o.shipToCity||'',o.customerState||o.shipToState||'',getStatus(o),r.balance,(o.orderTotal||0).toFixed(2),fmtDate(o.scheduledShip)||'']);
+      rows.push([r.ageDays??'',o.salesOrderNo||'',fmtDate(o.orderDate)||'',cn,o.customerCity||o.shipToCity||'',o.customerState||o.shipToState||'',getOrderLine(o),getStatus(o),r.balance,(o.orderTotal||0).toFixed(2),fmtDate(o.scheduledShip)||'']);
     });
     filename='aging-'+new Date().toISOString().slice(0,10)+'.csv';
   }
