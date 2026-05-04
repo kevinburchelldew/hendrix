@@ -545,7 +545,7 @@ async function handleFile(input){
       results.success.push(file.name);
     }catch(e){
       console.error('Failed to import '+file.name,e);
-      results.failed.push({name:file.name,error:e.message});
+      results.failed.push({name:file.name,error:e.message,rawResponse:e.rawResponse||null,uploadType});
     }
   }
   
@@ -555,7 +555,22 @@ async function handleFile(input){
     summaryHtml+=`<div class="msg-ok">✓ Successfully imported ${results.success.length} file${results.success.length!==1?'s':''}</div>`;
   }
   if(results.failed.length>0){
-    summaryHtml+=`<div class="msg-err" style="margin-top:8px">✗ Failed ${results.failed.length}: ${results.failed.map(f=>f.name+' ('+f.error.slice(0,50)+')').join(', ')}</div>`;
+    summaryHtml+=`<div class="msg-err" style="margin-top:8px">✗ Failed ${results.failed.length} file${results.failed.length!==1?'s':''}. Click any to see details:</div>`;
+    results.failed.forEach((f,fi)=>{
+      const detailId='fail-detail-'+fi+'-'+Date.now();
+      const shortErr=f.error.split('\n')[0].slice(0,80);
+      const fullDetail=(f.error+(f.rawResponse?'\n\n--- Raw AI response ---\n'+f.rawResponse:'')).replace(/</g,'&lt;');
+      const manualBtn=f.uploadType==='invoice'?`<button onclick="switchTab('upload');setTimeout(()=>showManualInvoiceForm(),100)" style="padding:4px 10px;border-radius:6px;border:1px solid #2E7D32;background:#fff;color:#2E7D32;cursor:pointer;font-size:11px;font-weight:500;margin-left:8px">Enter manually</button>`:'';
+      summaryHtml+=`<div style="background:#FFEBEE;border-radius:8px;padding:10px 12px;margin-top:6px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <strong style="color:#C62828">${f.name.replace(/</g,'&lt;')}</strong>
+          <span style="color:#666;flex:1">${shortErr.replace(/</g,'&lt;')}${shortErr.length>=80?'…':''}</span>
+          <button onclick="document.getElementById('${detailId}').style.display=document.getElementById('${detailId}').style.display==='none'?'block':'none'" style="padding:4px 10px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:11px">Show details</button>
+          ${manualBtn}
+        </div>
+        <pre id="${detailId}" style="display:none;margin:8px 0 0;padding:10px;background:#fff;border-radius:6px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:400px;overflow:auto;font-family:ui-monospace,monospace;color:#333">${fullDetail}</pre>
+      </div>`;
+    });
   }
   status.innerHTML=summaryHtml;
   input.value='';
@@ -583,6 +598,37 @@ async function callAI(prompt){
   if(start!==-1&&end!==-1)text=text.slice(start,end+1);
   if(!text) throw new Error('Empty response from AI. Raw: ' + rawText.slice(0,300));
   return text;
+}
+
+// Forgiving JSON parser. The AI sometimes emits near-JSON with bare keys, single quotes, or trailing commas.
+// We try strict parse first; if that fails we apply targeted fixes and try again. If everything fails,
+// we throw an error that includes the raw text so the issue is debuggable.
+function safeJsonParse(raw){
+  // Attempt 1: as-is
+  try { return JSON.parse(raw); } catch(e1){
+    // Attempt 2: apply common AI-output fixes
+    let fixed=raw;
+    // Strip JS-style comments (// and /* */) the AI sometimes adds for clarity
+    fixed=fixed.replace(/\/\/[^\n\r]*/g,'').replace(/\/\*[\s\S]*?\*\//g,'');
+    // Quote bare keys: { foo: ... }  →  { "foo": ... }
+    // Match keys at start of object or after a comma; words plus optional dashes/underscores; followed by colon.
+    fixed=fixed.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g,'$1"$2":');
+    // Convert single-quoted strings to double-quoted (only when they look like JSON strings).
+    // Cautious: only swap quotes that are followed by : or , or } or ] or whitespace+those, to avoid mangling apostrophes.
+    fixed=fixed.replace(/'([^'\\\n]*(?:\\.[^'\\\n]*)*)'(\s*[:,}\]])/g,'"$1"$2');
+    fixed=fixed.replace(/([:,\[]\s*)'([^'\\\n]*(?:\\.[^'\\\n]*)*)'/g,'$1"$2"');
+    // Remove trailing commas before } or ]
+    fixed=fixed.replace(/,(\s*[}\]])/g,'$1');
+    // Some models emit `"value",}` — already handled above. Also handle Python-style None/True/False just in case.
+    fixed=fixed.replace(/\bNone\b/g,'null').replace(/\bTrue\b/g,'true').replace(/\bFalse\b/g,'false');
+    try { return JSON.parse(fixed); } catch(e2){
+      // Throw a debuggable error: original error + truncated raw text
+      const preview=raw.length>500?raw.slice(0,500)+'…':raw;
+      const err=new Error('AI returned malformed JSON ('+e1.message+').\n\nWhat the AI returned:\n'+preview);
+      err.rawResponse=raw;
+      throw err;
+    }
+  }
 }
 
 async function handleOrderPDF(text,filename,status,isBulk){
@@ -626,7 +672,7 @@ async function handleOrderPDF(text,filename,status,isBulk){
   const tcIdx = text.search(/TERMS\s*&\s*CONDITIONS\s+OF\s+SALE/i);
   if(tcIdx > 0) cleanText = text.slice(0, tcIdx);
 
-  const raw=await callAI(`Parse this Marmon Utility order acknowledgement. Return ONLY raw JSON, no markdown. Pay close attention to extracting EVERY line item — there may be multiple (001, 002, 003, etc.).
+  const raw=await callAI(`Parse this Marmon Utility order acknowledgement. Return ONLY strict valid JSON — no markdown, no comments, no trailing commas. Every property name MUST be wrapped in double quotes. Every string value MUST be wrapped in double quotes. Pay close attention to extracting EVERY line item — there may be multiple (001, 002, 003, etc.). If a value contains a double quote, escape it as \\".
 
 Required JSON shape:
 {
@@ -652,7 +698,7 @@ IMPORTANT: Include ALL line items. Each line starts with a 3-digit number like 0
 
 Document:
 ${cleanText.slice(0,6000)}`);
-  const parsed=JSON.parse(raw);
+  const parsed=safeJsonParse(raw);
   // Merge regex-extracted fields (always more reliable) with AI-parsed fields
   const order={
     ...parsed,
@@ -708,7 +754,7 @@ async function handleInvoicePDF(text,filename,status,isBulk){
     }
   }
 
-  const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY raw JSON, no markdown:
+  const raw=await callAI(`Parse this Marmon Utility invoice/shipment document. Return ONLY strict valid JSON — no markdown, no comments, no trailing commas. Every property name MUST be wrapped in double quotes. Every string value MUST be wrapped in double quotes.
 {
   "salesOrderNo": "${extractedSO || 'the number after OUR ORDER: label'}",
   "invoiceNo": "${extractedInv || 'INVOICE NO value from document header'}",
@@ -718,7 +764,7 @@ async function handleInvoicePDF(text,filename,status,isBulk){
   "invoiceTotal": 0
 }
 Document: ${text.slice(0,5000)}`);
-  const inv=JSON.parse(raw);
+  const inv=safeJsonParse(raw);
   // Override with regex-extracted SO# if available — more reliable than AI
   if(extractedSO) inv.salesOrderNo=extractedSO;
   if(extractedInv) inv.invoiceNo=extractedInv;
