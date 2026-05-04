@@ -1005,8 +1005,8 @@ function renderDashboard(){
       };
       const showUnclassified=breakdown.unclassified.revenue>0;
       lineEl.innerHTML=`<div style="display:grid;grid-template-columns:repeat(${showUnclassified?3:2},1fr);gap:12px">
-        ${cardFor('Molded','molded','#E3F2FD','#1565C0')}
-        ${cardFor('Aerial','aerial','#FFF3E0','#E65100')}
+        ${cardFor('Molded','molded','#FFF3E0','#E65100')}
+        ${cardFor('Aerial','aerial','#E3F2FD','#1565C0')}
         ${showUnclassified?cardFor('Unclassified','unclassified','#f5f5f5','#666'):''}
       </div>${showUnclassified?'<div style="font-size:11px;color:#888;margin-top:10px;font-style:italic">Tip: '+breakdown.unclassified.orders.size+' order'+(breakdown.unclassified.orders.size!==1?'s':'')+' have unclassified products. Open the Commission Rates tab and use Bulk Classify to tag them.</div>':''}`;
     }
@@ -1610,7 +1610,7 @@ function renderCommissionRates(){
     let molded=0,aerial=0,unclassified=0;
     entries.forEach(p=>{const l=productLines[p];if(l==='molded')molded++;else if(l==='aerial')aerial++;else unclassified++;});
     const pct=entries.length?Math.round((molded+aerial)/entries.length*100):0;
-    sumEl.innerHTML=`<strong>${entries.length}</strong> total products · <span style="color:#1565C0">${molded} Molded</span> · <span style="color:#E65100">${aerial} Aerial</span> · <span style="color:#888">${unclassified} unclassified</span> (${pct}% classified)`;
+    sumEl.innerHTML=`<strong>${entries.length}</strong> total products · <span style="color:#E65100">${molded} Molded</span> · <span style="color:#1565C0">${aerial} Aerial</span> · <span style="color:#888">${unclassified} unclassified</span> (${pct}% classified)`;
   }
 
   if(!entries.length){el.innerHTML='<div class="empty">No products yet — add a product number above or import an order to see products here</div>';return;}
@@ -1635,7 +1635,7 @@ function renderCommissionRates(){
     return`<tr>
       <td style="font-family:monospace;font-weight:600">${p}</td>
       <td>
-        <select onchange="setLineInline('${p}',this.value)" style="width:110px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:12px;background:${line==='molded'?'#E3F2FD':line==='aerial'?'#FFF3E0':'#fff'};color:${line==='molded'?'#1565C0':line==='aerial'?'#E65100':'#888'};font-weight:${line?600:400}">
+        <select onchange="setLineInline('${p}',this.value)" style="width:110px;height:28px;border-radius:6px;border:1px solid #d0d0d0;padding:0 6px;font-size:12px;background:${line==='molded'?'#FFF3E0':line==='aerial'?'#E3F2FD':'#fff'};color:${line==='molded'?'#E65100':line==='aerial'?'#1565C0':'#888'};font-weight:${line?600:400}">
           <option value="" ${!line?'selected':''}>—</option>
           <option value="molded" ${line==='molded'?'selected':''}>Molded</option>
           <option value="aerial" ${line==='aerial'?'selected':''}>Aerial</option>
@@ -2164,8 +2164,8 @@ function bulkClassifyProducts(pattern,mode,line){
 // Render a small line badge for an order line classification
 function lineBadge(line,extraStyle){
   const cfg={
-    molded:{label:'Molded',bg:'#E3F2FD',fg:'#1565C0'},
-    aerial:{label:'Aerial',bg:'#FFF3E0',fg:'#E65100'},
+    molded:{label:'Molded',bg:'#FFF3E0',fg:'#E65100'},
+    aerial:{label:'Aerial',bg:'#E3F2FD',fg:'#1565C0'},
     mixed:{label:'Mixed',bg:'#F3E5F5',fg:'#6A1B9A'},
     unclassified:{label:'—',bg:'#f5f5f5',fg:'#999'}
   };
@@ -2532,7 +2532,7 @@ function renderBranchReport(){
       <th>Branch</th><th>Location</th>
       <th style="text-align:right">Orders</th>
       <th style="text-align:right">Units shipped</th>
-      ${showLineCols?'<th style="text-align:right;color:#1565C0">Molded $</th><th style="text-align:right;color:#E65100">Aerial $</th>':''}
+      ${showLineCols?'<th style="text-align:right;color:#E65100">Molded $</th><th style="text-align:right;color:#1565C0">Aerial $</th>':''}
       <th style="text-align:right">Revenue</th>
       <th style="text-align:right">Commission</th>
       <th>Top product</th>
@@ -2543,7 +2543,7 @@ function renderBranchReport(){
         <td style="color:#666;font-size:12px">${[g.city,g.state].filter(Boolean).join(', ')||'—'}</td>
         <td style="text-align:right">${g.orderCount}</td>
         <td style="text-align:right">${g.unitsShipped.toLocaleString()}</td>
-        ${showLineCols?`<td style="text-align:right;color:#1565C0">${g.moldedRev>0?fmt(g.moldedRev):'—'}</td><td style="text-align:right;color:#E65100">${g.aerialRev>0?fmt(g.aerialRev):'—'}</td>`:''}
+        ${showLineCols?`<td style="text-align:right;color:#E65100">${g.moldedRev>0?fmt(g.moldedRev):'—'}</td><td style="text-align:right;color:#1565C0">${g.aerialRev>0?fmt(g.aerialRev):'—'}</td>`:''}
         <td style="text-align:right;font-weight:600">${fmt(g.revenue)}</td>
         <td style="text-align:right;color:#0F6E56">${g.commission?fmt(g.commission):'—'}</td>
         <td style="font-family:monospace;font-size:11px;color:#666">${g.topProduct||'—'}</td>
@@ -2552,7 +2552,7 @@ function renderBranchReport(){
         <td colspan="2">TOTAL</td>
         <td style="text-align:right">${totals.orders}</td>
         <td style="text-align:right">${totals.units.toLocaleString()}</td>
-        ${showLineCols?`<td style="text-align:right;color:#1565C0">${fmt(totals.molded)}</td><td style="text-align:right;color:#E65100">${fmt(totals.aerial)}</td>`:''}
+        ${showLineCols?`<td style="text-align:right;color:#E65100">${fmt(totals.molded)}</td><td style="text-align:right;color:#1565C0">${fmt(totals.aerial)}</td>`:''}
         <td style="text-align:right">${fmt(totals.revenue)}</td>
         <td style="text-align:right;color:#0F6E56">${fmt(totals.commission)}</td>
         <td></td>
