@@ -41,8 +41,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1
 .utype-icon{font-size:24px;margin-bottom:6px}
 .utype-label{font-size:13px;font-weight:600}
 .utype-sub{font-size:11px;color:#888;margin-top:2px}
-.upload-zone{border:2px dashed #d0d0d0;border-radius:10px;padding:2rem;text-align:center;cursor:pointer;transition:background .15s}
+.upload-zone{border:2px dashed #d0d0d0;border-radius:10px;padding:2rem;text-align:center;cursor:pointer;transition:background .15s,border-color .15s,transform .15s}
 .upload-zone:hover{background:#f9f9f9}
+.upload-zone.drag-active{background:#E8F5E9;border-color:#2E7D32;border-style:solid;transform:scale(1.01)}
+.upload-zone.drag-active *{pointer-events:none}
 #file-input{display:none}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;padding:8px 10px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #e5e5e5;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
@@ -334,10 +336,15 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
           <div class="utype-sub">Updates an existing order</div>
         </div>
       </div>
-      <div class="upload-zone" onclick="document.getElementById('file-input').click()">
+      <div class="upload-zone" id="upload-zone"
+           onclick="document.getElementById('file-input').click()"
+           ondragenter="handleDragEnter(event)"
+           ondragover="handleDragOver(event)"
+           ondragleave="handleDragLeave(event)"
+           ondrop="handleDrop(event)">
         <div style="font-size:32px;margin-bottom:10px">📄</div>
-        <div style="font-size:15px;font-weight:600;margin-bottom:4px" id="upload-zone-label">Click to choose an order acknowledgement PDF</div>
-        <div style="font-size:12px;color:#aaa">Select one or many PDFs — they'll be imported sequentially. AI reads each Marmon Utility document automatically.</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px" id="upload-zone-label">Click to choose an order acknowledgement PDF — or drag PDFs here</div>
+        <div style="font-size:12px;color:#aaa">Drag PDFs from your email, desktop, or Downloads folder. Multiple files are imported sequentially. AI reads each Marmon Utility document automatically.</div>
       </div>
       <input type="file" id="file-input" accept=".pdf" multiple onchange="handleFile(this)">
       <div id="upload-status"></div>
@@ -391,7 +398,7 @@ function selectType(t){
   uploadType=t;
   document.getElementById('type-order').classList.toggle('selected',t==='order');
   document.getElementById('type-invoice').classList.toggle('selected',t==='invoice');
-  document.getElementById('upload-zone-label').textContent=t==='order'?'Click to choose an order acknowledgement PDF':'Click to choose an invoice PDF';
+  document.getElementById('upload-zone-label').textContent=t==='order'?'Click to choose an order acknowledgement PDF — or drag PDFs here':'Click to choose an invoice PDF — or drag PDFs here';
 }
 
 function setFilter(f,el){
@@ -522,8 +529,60 @@ async function loadAliasesFromOneDrive(){
   }
 }
 
+// Drag-and-drop support. Counter approach prevents flicker from child-element dragenter/leave.
+let dragCounter=0;
+function handleDragEnter(e){
+  e.preventDefault();e.stopPropagation();
+  dragCounter++;
+  document.getElementById('upload-zone').classList.add('drag-active');
+}
+function handleDragOver(e){
+  e.preventDefault();e.stopPropagation();
+  // Hint to the OS that this is a copy operation, not a move
+  if(e.dataTransfer)e.dataTransfer.dropEffect='copy';
+}
+function handleDragLeave(e){
+  e.preventDefault();e.stopPropagation();
+  dragCounter--;
+  if(dragCounter<=0){
+    dragCounter=0;
+    document.getElementById('upload-zone').classList.remove('drag-active');
+  }
+}
+function handleDrop(e){
+  e.preventDefault();e.stopPropagation();
+  dragCounter=0;
+  document.getElementById('upload-zone').classList.remove('drag-active');
+  if(!e.dataTransfer)return;
+  // dataTransfer.files works for files dropped from desktop/Downloads/email-clients-that-cooperate
+  const all=Array.from(e.dataTransfer.files||[]);
+  if(!all.length){
+    // Some email clients hand over URLs/text instead of files. Tell the user.
+    document.getElementById('upload-status').innerHTML=
+      '<div class="msg-warn">⚠ Couldn\'t read any files from that drop. Some email clients (especially webmail) won\'t hand over the actual file. Try saving the attachment to your Downloads folder first, then drag from there.</div>';
+    return;
+  }
+  const pdfs=all.filter(f=>f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf'));
+  const skipped=all.length-pdfs.length;
+  if(!pdfs.length){
+    document.getElementById('upload-status').innerHTML=
+      '<div class="msg-err">✗ No PDFs in that drop. This tool only accepts .pdf files.</div>';
+    return;
+  }
+  // Build a synthetic input-like object so handleFile keeps working unchanged
+  handleFile(pdfs);
+  if(skipped>0){
+    // Append a note after handleFile takes over
+    setTimeout(()=>{
+      const s=document.getElementById('upload-status');
+      if(s)s.innerHTML+='<div class="msg-warn" style="margin-top:6px">Skipped '+skipped+' non-PDF file'+(skipped!==1?'s':'')+'.</div>';
+    },50);
+  }
+}
+
 async function handleFile(input){
-  const files=Array.from(input.files);
+  // Accept either an HTMLInputElement (with .files) or an array/FileList of File objects
+  const files=Array.isArray(input)?input:Array.from(input.files||[]);
   if(!files.length)return;
   const status=document.getElementById('upload-status');
   const results={success:[],failed:[]};
@@ -573,7 +632,7 @@ async function handleFile(input){
     });
   }
   status.innerHTML=summaryHtml;
-  input.value='';
+  if(input&&input.value!==undefined)input.value='';
 }
 
 async function callAI(prompt){
@@ -2835,6 +2894,16 @@ function switchTab(t){
   if(t==='customers')renderCustomers();
   if(t==='commission')renderCommissionRates();
 }
+
+// Prevent the browser from opening a dropped PDF in a new tab if the user misses the drop zone.
+// Without this, dropping anywhere on the page would navigate away.
+['dragover','drop'].forEach(evt=>{
+  window.addEventListener(evt,e=>{
+    // If the drop target is inside the upload zone, let its handler manage it
+    if(e.target.closest&&e.target.closest('#upload-zone'))return;
+    e.preventDefault();
+  });
+});
 
 checkToken();
 if(!accessToken){
