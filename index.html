@@ -704,7 +704,9 @@ async function handleOrderPDF(text,filename,status,isBulk){
   // The PO# comes right before the first date in the document header
   let extractedPO = '';
   let extractedOrderDate = '';
-  // Try: alphanumeric with optional -XX suffix, followed by MM/DD/YYYY
+  // Words that look like PO candidates but are actually column headers / labels — never treat as PO
+  const PO_BLACKLIST = new Set(['DESCRIPTION','DATE','ORDER','CUSTOMER','SHIPPED','SCHEDULED','INVOICE','UNIT','QUANTITY','PRICE','TOTAL','PRODUCT','RELEASE','SALES','NUMBER','PURCHASE','ITEM','LINE','REQUESTED','ACKNOWLEDGEMENT','SHIP','BILL','TERMS','CONDITIONS','SALE','PAGE','PAYMENT','FREIGHT','DELIVERY']);
+  // POs almost always contain at least one digit (often mostly digits). Pure-alpha tokens like "DESCRIPTION" should never qualify.
   const poPatterns = [
     /([A-Z0-9]{5,}(?:-\d{2,3})?[A-Z]*)\s+(\d{1,2}\/\d{1,2}\/\d{4})/g,
     /(\d{7,10}[A-Z]*(?:-\d{2})?)\s+(\d{1,2}\/\d{1,2}\/\d{4})/g
@@ -712,10 +714,15 @@ async function handleOrderPDF(text,filename,status,isBulk){
   for(const pattern of poPatterns){
     const matches = [...text.matchAll(pattern)];
     for(const m of matches){
-      // skip if it's clearly not a PO# (e.g., just a date or the sales order #)
-      if(m[1].length < 5) continue;
-      if(/^\d{5,7}$/.test(m[1]) && m[1].length <= 7) continue; // likely the SO#
-      extractedPO = m[1];
+      const candidate = m[1];
+      // Skip pure-alpha words (real POs have digits)
+      if(!/\d/.test(candidate)) continue;
+      // Skip common label/header words even if they contain digits
+      if(PO_BLACKLIST.has(candidate.toUpperCase())) continue;
+      // Skip if it's clearly not a PO# (e.g., just a date or the sales order #)
+      if(candidate.length < 5) continue;
+      if(/^\d{5,7}$/.test(candidate) && candidate.length <= 7) continue; // likely the SO#
+      extractedPO = candidate;
       extractedOrderDate = m[2];
       break;
     }
@@ -762,13 +769,27 @@ IMPORTANT: Include ALL line items. Each line starts with a 3-digit number like 0
 Document:
 ${cleanText.slice(0,6000)}`);
   const parsed=safeJsonParse(raw);
+  // PO field: prefer the AI's value (it reads the actual labeled "CUSTOMER P.O. NUMBER"),
+  // fall back to the regex extraction only if AI returned nothing. Validate either way to
+  // reject obvious column-header words like "DESCRIPTION" that can sneak in.
+  function validatePO(candidate){
+    if(!candidate)return '';
+    const c=String(candidate).trim();
+    if(c.length<3)return '';
+    if(PO_BLACKLIST.has(c.toUpperCase()))return '';
+    if(!/\d/.test(c))return ''; // real POs have digits
+    return c;
+  }
+  const aiPO=validatePO(parsed.customerPONo);
+  const regexPO=validatePO(extractedPO);
+  const finalPO=aiPO||regexPO||'';
   // Merge regex-extracted fields (always more reliable) with AI-parsed fields
   const order={
     ...parsed,
     id: Date.now(),
     filename: filename,
     salesOrderNo: extractedSO || parsed.salesOrderNo || '',
-    customerPONo: extractedPO || parsed.customerPONo || '',
+    customerPONo: finalPO,
     orderDate: extractedOrderDate || parsed.orderDate || '',
     orderTotal: extractedTotal || parsed.orderTotal || 0,
     status: 'pending',
