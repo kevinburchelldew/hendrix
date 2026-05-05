@@ -1064,9 +1064,42 @@ function getStatus(o){
 }
 function statusBadge(o){
   const s=getStatus(o);
+  // For pending orders with a future ship date, show the scheduled month instead of "Pending"
+  if(s==='pending'){
+    const sd=parseDate(o.scheduledShip);
+    if(sd){
+      // sd is YYYY-MM-DD; pull month index 0-11
+      const monthIdx=parseInt(sd.slice(5,7),10)-1;
+      const yearStr=sd.slice(0,4);
+      const today=new Date();
+      const showYear=parseInt(yearStr,10)!==today.getFullYear();
+      return monthBadge(monthIdx,showYear?yearStr.slice(2):null);
+    }
+  }
   const map={shipped:['b-shipped','Shipped'],partial:['b-partial','Partial'],backorder:['b-backorder','Backorder'],overdue:['b-overdue','Overdue'],pending:['b-pending','Pending']};
   const[cls,label]=map[s]||['b-pending','Pending'];
   return`<span class="badge ${cls}">${label}</span>`;
+}
+
+// Color-coded month badge. monthIdx is 0-11. Optional yearSuffix shows 2-digit year for non-current-year ships.
+function monthBadge(monthIdx,yearSuffix){
+  const months=[
+    {name:'Jan',bg:'#E1F5FE',fg:'#01579B'}, // icy blue
+    {name:'Feb',bg:'#E8EAF6',fg:'#283593'}, // navy
+    {name:'Mar',bg:'#E0F2F1',fg:'#00695C'}, // teal
+    {name:'Apr',bg:'#F1F8E9',fg:'#558B2F'}, // light green
+    {name:'May',bg:'#F9FBE7',fg:'#827717'}, // sage/lime
+    {name:'Jun',bg:'#FFF8E1',fg:'#F57F17'}, // amber
+    {name:'Jul',bg:'#FFE0B2',fg:'#EF6C00'}, // bright orange (distinct from partial's deeper orange)
+    {name:'Aug',bg:'#FBE9E7',fg:'#BF360C'}, // terracotta
+    {name:'Sep',bg:'#FCE4EC',fg:'#AD1457'}, // pink
+    {name:'Oct',bg:'#F3E5F5',fg:'#7B1FA2'}, // lavender
+    {name:'Nov',bg:'#EDE7F6',fg:'#4527A0'}, // indigo (matches backorder hue but different bg)
+    {name:'Dec',bg:'#ECEFF1',fg:'#455A64'}, // slate
+  ];
+  const m=months[monthIdx]||{name:'?',bg:'#f5f5f5',fg:'#888'};
+  const label=m.name+(yearSuffix?' \''+yearSuffix:'');
+  return `<span class="badge" style="background:${m.bg};color:${m.fg};font-weight:600">${label}</span>`;
 }
 
 function getFilteredOrders(){
