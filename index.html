@@ -156,6 +156,10 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
       <div class="card-title">Revenue by product line</div>
       <div id="line-breakdown"><div class="empty">Classify products in the Commission Rates tab to see this breakdown</div></div>
     </div>
+    <div class="card" id="integrity-card" style="display:none;background:#FFF8E1;border:1px solid #FFE0B2">
+      <div class="card-title" style="color:#E65100">⚠ Data integrity issues detected</div>
+      <div id="integrity-body"></div>
+    </div>
     <div class="dash-grid">
       <div class="card">
         <div class="card-title">Revenue by customer</div>
@@ -449,7 +453,7 @@ async function loadFromOneDrive(){
   try{
     setSyncStatus('Loading from OneDrive...','');
     const data=await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content');
-    if(data){orders=Array.isArray(data)?data:[];localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');populateBranchFilter();const savedBranch=loadOrderFilterPrefs();if(savedBranch){const sel=document.getElementById('branch-filter');if(sel)sel.value=savedBranch;}renderDashboard();renderOrders();}
+    if(data){orders=Array.isArray(data)?data:[];const repaired=normalizeOrderNumbers(orders);if(repaired>0)console.log('[normalizeOrderNumbers] repaired numeric fields on '+repaired+' orders');localStorage.setItem('dewart_orders',JSON.stringify(orders));setSyncStatus('Synced with OneDrive','ok');populateBranchFilter();const savedBranch=loadOrderFilterPrefs();if(savedBranch){const sel=document.getElementById('branch-filter');if(sel)sel.value=savedBranch;}renderDashboard();renderOrders();}
     await loadAliasesFromOneDrive();
     await loadNotDuplicatesFromOneDrive();
     await loadProductLinesFromOneDrive();
@@ -776,6 +780,8 @@ ${cleanText.slice(0,6000)}`);
     const rate=getCommission(i.productNo);
     if(rate!==null)i.commissionPct=rate;
   });
+  // Coerce all numeric fields to real numbers (AI sometimes returns "$1,234.56" strings)
+  normalizeOrderNumbers([order]);
   const exists=orders.findIndex(o=>o.salesOrderNo===order.salesOrderNo);
   if(exists>=0){orders[exists]=order;if(!isBulk)status.innerHTML=`<div class="msg-warn">⚠ SO ${order.salesOrderNo} already existed — updated with this version.</div>`;}
   else{orders.unshift(order);if(!isBulk)status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>`;}
@@ -894,6 +900,8 @@ async function applyInvoiceToOrder(inv, idx, status){
   else order.status='shipped';
   order.lastInvoiceNo=inv.invoiceNo;
   order.lastShipDate=inv.actualShipDate;
+  // Coerce all numeric fields to real numbers (the invoice may have brought in string values)
+  normalizeOrderNumbers([order]);
   orders[idx]=order;
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();
@@ -983,7 +991,52 @@ async function cleanupDuplicateInvoices(){
   alert(msg);
 }
 
-function fmt(n){return'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmt(n){
+  // Coerce any value to a finite number; if it isn't, fall back to 0.
+  // Handles strings like "$1,234.56", null, undefined, NaN.
+  let v=n;
+  if(typeof v==='string')v=parseFloat(v.replace(/[^0-9.\-]/g,''));
+  if(typeof v!=='number'||!isFinite(v))v=0;
+  return '$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+// Safe number coercion: returns a finite number, or 0 if the value can't be parsed.
+function num(x){
+  let v=x;
+  if(typeof v==='string')v=parseFloat(v.replace(/[^0-9.\-]/g,''));
+  if(typeof v!=='number'||!isFinite(v))return 0;
+  return v;
+}
+
+// Walk every order and coerce all numeric fields to real finite numbers.
+// AI extraction occasionally returns strings like "$1,234.56" or null where numbers are expected;
+// this guarantees downstream math never produces NaN, regardless of upstream data quality.
+// Returns the number of orders that had at least one field repaired (useful for diagnostics).
+function normalizeOrderNumbers(orderList){
+  let touchedOrders=0;
+  (orderList||[]).forEach(o=>{
+    let touched=false;
+    const origTotal=o.orderTotal;
+    o.orderTotal=num(o.orderTotal);
+    if(origTotal!==undefined&&origTotal!==null&&origTotal!==o.orderTotal&&typeof origTotal!=='number')touched=true;
+    if(Array.isArray(o.items)){
+      o.items.forEach(i=>{
+        ['qty','qtyShipped','qtyBalance','unitPrice','total','commissionPct'].forEach(f=>{
+          if(i[f]===undefined||i[f]===null)return;
+          const orig=i[f];
+          const coerced=num(orig);
+          if(typeof orig!=='number'&&orig!==coerced)touched=true;
+          i[f]=coerced;
+        });
+        // If qtyBalance is missing, derive it
+        if(i.qtyBalance===undefined||i.qtyBalance===null){
+          i.qtyBalance=Math.max(0,(i.qty||0)-(i.qtyShipped||0));
+        }
+      });
+    }
+    if(touched)touchedOrders++;
+  });
+  return touchedOrders;
+}
 function parseDate(s){
   if(!s)return null;
   // handle MM/DD/YYYY
@@ -1048,6 +1101,59 @@ function setTrendMonths(m){
   renderDashboard();
 }
 
+// Data integrity check: surface orders with suspicious numbers so the user can find and fix them.
+// Called from renderDashboard. Hidden when everything's clean.
+function renderDataIntegrity(){
+  const card=document.getElementById('integrity-card');
+  const body=document.getElementById('integrity-body');
+  if(!card||!body)return;
+  const issues=[];
+  orders.forEach(o=>{
+    const oi=[];
+    // Missing orderTotal entirely
+    if(o.orderTotal===null||o.orderTotal===undefined||o.orderTotal===0){
+      // Only flag if there are line items with values — otherwise it's legitimately empty
+      const itemSum=(o.items||[]).reduce((a,i)=>a+num(i.total),0);
+      if(itemSum>0&&num(o.orderTotal)===0)oi.push('orderTotal missing — line items sum to '+fmt(itemSum));
+    }
+    // orderTotal differs from sum of line item totals by more than $1 (rounding tolerance)
+    const itemSum=(o.items||[]).reduce((a,i)=>a+num(i.total),0);
+    if(itemSum>0&&Math.abs(num(o.orderTotal)-itemSum)>1){
+      oi.push('orderTotal ('+fmt(o.orderTotal)+') doesn\'t match sum of line items ('+fmt(itemSum)+')');
+    }
+    // Line items with missing/zero unitPrice but qty>0 and total>0 — total can't be verified
+    (o.items||[]).forEach((it,idx)=>{
+      const q=num(it.qty),u=num(it.unitPrice),t=num(it.total);
+      if(q>0&&u>0&&t>0&&Math.abs(q*u-t)>1){
+        oi.push('line '+(it.lineNo||idx+1)+' '+(it.productNo||'')+': qty × unit price ('+fmt(q*u)+') ≠ total ('+fmt(t)+')');
+      }
+      // qtyBalance + qtyShipped should equal qty
+      const s=num(it.qtyShipped),b=num(it.qtyBalance);
+      if(q>0&&Math.abs(s+b-q)>0.01){
+        oi.push('line '+(it.lineNo||idx+1)+' '+(it.productNo||'')+': shipped+balance ('+(s+b)+') ≠ ordered ('+q+')');
+      }
+    });
+    if(oi.length)issues.push({order:o,problems:oi});
+  });
+  if(!issues.length){card.style.display='none';return;}
+  card.style.display='';
+  body.innerHTML=`<div style="font-size:12px;color:#666;margin-bottom:10px">${issues.length} order${issues.length!==1?'s':''} have number fields that look off. Click any to open and review.</div>`+
+    issues.slice(0,15).map(({order:o,problems})=>{
+      const cn=getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||o.customer||'(no customer)';
+      return `<div onclick="showDetail('${o.id}')" style="cursor:pointer;background:#fff;border-radius:6px;padding:10px 12px;margin-bottom:6px;border:1px solid #FFE0B2">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <strong style="font-family:monospace">SO ${o.salesOrderNo||'?'}</strong>
+          <span style="color:#666;font-size:12px">${cn.replace(/</g,'&lt;')}</span>
+          <span style="color:#888;font-size:11px;margin-left:auto">${fmtDate(o.orderDate)||''}</span>
+        </div>
+        <ul style="margin:4px 0 0 18px;padding:0;font-size:11px;color:#666;line-height:1.6">
+          ${problems.map(p=>'<li>'+p.replace(/</g,'&lt;')+'</li>').join('')}
+        </ul>
+      </div>`;
+    }).join('')+
+    (issues.length>15?`<div style="font-size:11px;color:#888;margin-top:8px;font-style:italic">…and ${issues.length-15} more. Showing the first 15.</div>`:'');
+}
+
 function renderDashboard(){
   renderYearFilter();
   const _allOrders=orders;
@@ -1071,6 +1177,9 @@ function renderDashboard(){
     },0));
   },0);
   document.getElementById('m-commission').textContent=fmt(totalCommission);
+
+  // Surface any orders with broken numbers
+  renderDataIntegrity();
 
   // Revenue by product line breakdown
   const lineEl=document.getElementById('line-breakdown');
