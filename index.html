@@ -374,6 +374,18 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const REDIRECT=location.href.split('?')[0].split('#')[0];
 let accessToken=null;
+let tokenExpiresAt=0; // epoch ms when the access token expires; 0 means unknown/expired
+// Restore from sessionStorage so a page refresh inside the token's lifetime stays signed in
+try{
+  const t=sessionStorage.getItem('dewart_token');
+  const e=parseInt(sessionStorage.getItem('dewart_token_exp'),10);
+  if(t&&e&&e>Date.now()){accessToken=t;tokenExpiresAt=e;}
+}catch(_){}
+
+function isTokenValid(){
+  // Treat tokens with <60s left as expired so an in-flight save doesn't race the boundary
+  return !!accessToken && tokenExpiresAt > Date.now()+60000;
+}
 let orders=[];
 let clientId=localStorage.getItem('dewart_client_id')||'';
 let uploadType='order';
@@ -421,6 +433,8 @@ function handleAuth(){
 }
 function signOut(){
   accessToken=null;
+  tokenExpiresAt=0;
+  try{sessionStorage.removeItem('dewart_token');sessionStorage.removeItem('dewart_token_exp');}catch(_){}
   orders=[];
   localStorage.removeItem('dewart_orders');
   updateAuthUI(false);
@@ -436,6 +450,13 @@ async function checkToken(){
   if(hash.includes('access_token')){
     const p=new URLSearchParams(hash.replace('#',''));
     accessToken=p.get('access_token');
+    // OAuth implicit flow returns expires_in in seconds (typically 3600)
+    const expiresIn=parseInt(p.get('expires_in'),10)||3600;
+    tokenExpiresAt=Date.now()+(expiresIn*1000);
+    try{
+      sessionStorage.setItem('dewart_token',accessToken);
+      sessionStorage.setItem('dewart_token_exp',String(tokenExpiresAt));
+    }catch(_){}
     history.replaceState(null,null,location.pathname);
     updateAuthUI(true);setSyncStatus('Connected to OneDrive','ok');
     await loadFromOneDrive();
@@ -468,27 +489,157 @@ async function loadFromOneDrive(){
 }
 
 async function saveToOneDrive(){
-  if(!accessToken)return;
+  // Backwards-compatible entry point. Internally now queues a debounced save.
+  return queueSave('orders');
+}
+
+// --- Save queue: collapses rapid changes into one OneDrive upload per file ---
+const _saveQueue={pending:new Set(),timer:null,inFlight:false};
+const SAVE_DEBOUNCE_MS=600;
+
+function queueSave(kind){
+  // Each modification just adds its kind to the pending set; the queue dedupes & runs them all.
+  // localStorage already holds the latest data — this only handles OneDrive persistence.
+  _saveQueue.pending.add(kind);
+  scheduleSaveFlush();
+}
+
+function scheduleSaveFlush(){
+  if(_saveQueue.timer)return;
+  _saveQueue.timer=setTimeout(flushSaveQueue,SAVE_DEBOUNCE_MS);
+}
+
+async function flushSaveQueue(){
+  _saveQueue.timer=null;
+  if(_saveQueue.inFlight){
+    // Another flush is mid-flight; reschedule so the latest data still gets written
+    scheduleSaveFlush();
+    return;
+  }
+  if(!_saveQueue.pending.size)return;
+  if(!accessToken){
+    // Not signed in at all. Surface a banner and bail.
+    showUnsavedBanner('Not signed in to OneDrive — your changes are saved locally only. Sign in to sync them.');
+    return;
+  }
+  if(!isTokenValid()){
+    // Token expired. Surface re-auth banner and stop trying.
+    accessToken=null;
+    try{sessionStorage.removeItem('dewart_token');sessionStorage.removeItem('dewart_token_exp');}catch(_){}
+    showSessionExpiredBanner();
+    return;
+  }
+  _saveQueue.inFlight=true;
+  const toSave=[..._saveQueue.pending];
+  _saveQueue.pending.clear();
+  setSyncStatus('Saving to OneDrive...','');
   try{
-    setSyncStatus('Saving to OneDrive...','');
-    await graphFetch('/me/drive/root:/Sales Tracker/orders.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(orders)});
+    for(const kind of toSave){await doSave(kind);}
     setSyncStatus('Saved to OneDrive','ok');
-  }catch(e){setSyncStatus('Save failed','err');console.error(e);}
+    hideUnsavedBanner();
+  }catch(e){
+    console.error('OneDrive save failed:',e);
+    // On 401/InvalidAuthenticationToken, treat as session expired
+    const msg=String(e.message||e);
+    if(/401|InvalidAuthenticationToken|InvalidAuthentication|TokenNotFound|expired/i.test(msg)){
+      accessToken=null;
+      try{sessionStorage.removeItem('dewart_token');sessionStorage.removeItem('dewart_token_exp');}catch(_){}
+      // Re-queue what we tried to save so it can flush after re-auth
+      toSave.forEach(k=>_saveQueue.pending.add(k));
+      showSessionExpiredBanner();
+    }else{
+      // Re-queue and show generic banner with details
+      toSave.forEach(k=>_saveQueue.pending.add(k));
+      showUnsavedBanner('Unable to save to OneDrive: '+msg.slice(0,120)+'. Your changes are saved locally and will retry.');
+      // schedule retry in 30s
+      setTimeout(scheduleSaveFlush,30000);
+    }
+    setSyncStatus('Save failed','err');
+  }finally{
+    _saveQueue.inFlight=false;
+    // If new changes came in while we were saving, run again
+    if(_saveQueue.pending.size&&!_saveQueue.timer)scheduleSaveFlush();
+  }
 }
 
-async function saveAliasesToOneDrive(){
-  if(!accessToken)return;
-  try{
-    await graphFetch('/me/drive/root:/Sales Tracker/customer-aliases.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerAliases)});
-  }catch(e){console.error('Failed to save aliases to OneDrive:',e);}
+async function doSave(kind){
+  const map={
+    orders:{path:'/me/drive/root:/Sales Tracker/orders.json:/content',data:()=>orders},
+    aliases:{path:'/me/drive/root:/Sales Tracker/customer-aliases.json:/content',data:()=>customerAliases},
+    notDuplicates:{path:'/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content',data:()=>customerNotDuplicates},
+    productLines:{path:'/me/drive/root:/Sales Tracker/product-lines.json:/content',data:()=>productLines},
+  };
+  const cfg=map[kind];
+  if(!cfg)return;
+  await graphFetch(cfg.path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg.data())});
 }
 
-async function saveProductLinesToOneDrive(){
-  if(!accessToken)return;
-  try{
-    await graphFetch('/me/drive/root:/Sales Tracker/product-lines.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(productLines)});
-  }catch(e){console.error('Failed to save product lines to OneDrive:',e);}
+// --- Session-expired banner: prominent, sticky, action-oriented ---
+function showSessionExpiredBanner(){
+  let el=document.getElementById('session-expired-banner');
+  if(el){el.style.display='';return;}
+  el=document.createElement('div');
+  el.id='session-expired-banner';
+  el.innerHTML=`<div style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#C62828;color:#fff;padding:14px 20px;display:flex;align-items:center;gap:14px;box-shadow:0 2px 12px rgba(0,0,0,0.2);font-size:14px">
+    <strong style="font-size:15px">⚠ Your OneDrive session has expired.</strong>
+    <span style="opacity:.9">Recent edits are saved locally but haven't synced to OneDrive yet. Sign in again to sync them.</span>
+    <button onclick="handleAuth();this.parentElement.parentElement.style.display='none';" style="margin-left:auto;padding:8px 18px;border-radius:6px;border:none;background:#fff;color:#C62828;font-weight:600;cursor:pointer;font-size:13px">Sign in again</button>
+    <button onclick="this.parentElement.parentElement.style.display='none';" title="Dismiss" style="padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.4);background:transparent;color:#fff;cursor:pointer;font-size:13px">Later</button>
+  </div>`;
+  document.body.appendChild(el);
 }
+function showUnsavedBanner(msg){
+  const txt=msg||'Some changes haven\'t synced to OneDrive yet.';
+  let el=document.getElementById('unsaved-banner');
+  if(el){
+    el.style.display='';
+    const span=el.querySelector('span');
+    if(span)span.textContent=txt;
+    return;
+  }
+  if(!document.body)return; // not safe to mount yet
+  el=document.createElement('div');
+  el.id='unsaved-banner';
+  el.innerHTML=`<div style="position:fixed;top:0;left:0;right:0;z-index:9998;background:#FFF3E0;color:#E65100;border-bottom:2px solid #FFB74D;padding:10px 20px;display:flex;align-items:center;gap:14px;font-size:13px">
+    <strong>⚠ Sync issue</strong>
+    <span></span>
+    <button onclick="scheduleSaveFlush()" style="margin-left:auto;padding:6px 14px;border-radius:6px;border:1px solid #E65100;background:#fff;color:#E65100;cursor:pointer;font-size:12px;font-weight:500">Retry now</button>
+    <button onclick="this.parentElement.parentElement.style.display='none';" style="padding:4px 10px;border-radius:6px;border:1px solid #E65100;background:transparent;color:#E65100;cursor:pointer;font-size:12px">×</button>
+  </div>`;
+  const span=el.querySelector('span');
+  if(span)span.textContent=txt;
+  document.body.appendChild(el);
+}
+function hideUnsavedBanner(){
+  const el=document.getElementById('unsaved-banner');
+  if(el)el.style.display='none';
+}
+
+// --- Background heartbeat: warn the user BEFORE the token actually expires ---
+setInterval(()=>{
+  if(!accessToken)return;
+  const remaining=tokenExpiresAt-Date.now();
+  if(remaining<=0){
+    // Token has expired but no save has tried yet — surface the banner proactively
+    accessToken=null;
+    try{sessionStorage.removeItem('dewart_token');sessionStorage.removeItem('dewart_token_exp');}catch(_){}
+    showSessionExpiredBanner();
+  }else if(remaining<5*60*1000&&!document.getElementById('session-warning-banner')){
+    // Less than 5 min left — show a subtle warning (not blocking)
+    const el=document.createElement('div');
+    el.id='session-warning-banner';
+    el.innerHTML=`<div style="position:fixed;top:0;left:0;right:0;z-index:9997;background:#FFFDE7;color:#827717;border-bottom:1px solid #F0F4C3;padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:12px">
+      <span>⏰ Your OneDrive session expires in less than 5 minutes. Sign in again to keep saving without interruption.</span>
+      <button onclick="handleAuth()" style="margin-left:auto;padding:4px 12px;border-radius:5px;border:1px solid #827717;background:#fff;color:#827717;cursor:pointer;font-size:11px;font-weight:500">Sign in again</button>
+      <button onclick="this.parentElement.parentElement.remove();" style="padding:4px 8px;border-radius:5px;border:1px solid #827717;background:transparent;color:#827717;cursor:pointer;font-size:11px">×</button>
+    </div>`;
+    document.body.appendChild(el);
+  }
+},30000);
+
+async function saveAliasesToOneDrive(){return queueSave('aliases');}
+
+async function saveProductLinesToOneDrive(){return queueSave('productLines');}
 
 async function loadProductLinesFromOneDrive(){
   try{
@@ -502,12 +653,7 @@ async function loadProductLinesFromOneDrive(){
   }
 }
 
-async function saveNotDuplicatesToOneDrive(){
-  if(!accessToken)return;
-  try{
-    await graphFetch('/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(customerNotDuplicates)});
-  }catch(e){console.error('Failed to save not-duplicates to OneDrive:',e);}
-}
+async function saveNotDuplicatesToOneDrive(){return queueSave('notDuplicates');}
 
 async function loadNotDuplicatesFromOneDrive(){
   try{
@@ -3081,6 +3227,21 @@ function switchTab(t){
     if(e.target.closest&&e.target.closest('#upload-zone'))return;
     e.preventDefault();
   });
+});
+
+// Warn before leaving if there are unsaved-to-OneDrive changes
+window.addEventListener('beforeunload',function(e){
+  if(_saveQueue.pending.size>0||_saveQueue.inFlight){
+    e.preventDefault();
+    e.returnValue='You have changes that haven\'t synced to OneDrive yet. Are you sure?';
+    return e.returnValue;
+  }
+});
+// Flush the queue immediately when the tab goes into background or closes
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='hidden'&&_saveQueue.pending.size>0){
+    flushSaveQueue();
+  }
 });
 
 checkToken();
