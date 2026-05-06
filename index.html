@@ -229,7 +229,7 @@ tr.clickable:hover td{background:#fafafa;cursor:pointer}
         <option value="molded">Molded only</option>
         <option value="aerial">Aerial only</option>
         <option value="mixed">Mixed only</option>
-        <option value="unclassified">Unclassified</option>
+        <option value="unclassified">Has unclassified items</option>
       </select>
       <select id="sort-select" onchange="onSortChange()">
         <option value="date-desc">Newest first</option>
@@ -1644,7 +1644,7 @@ function renderOrders(){
     const matchQ=!q||(o.customer||'').toLowerCase().includes(q)||(getCanonicalCustomer(o.customer,o.customerCity||o.shipToCity,o.customerState||o.shipToState)||'').toLowerCase().includes(q)||(o.customerCity||'').toLowerCase().includes(q)||(o.customerState||'').toLowerCase().includes(q)||(o.salesOrderNo||'').toLowerCase().includes(q)||(o.customerPONo||'').toLowerCase().includes(q)||(o.items||[]).some(it=>(it.productNo||'').toLowerCase().includes(q));
     const matchF=activeFilter==='all'||getStatus(o)===activeFilter;
     const matchB=!branchFilterKey||orderCustomerKey(o)===branchFilterKey;
-    const matchL=!lineFilter||getOrderLine(o)===lineFilter;
+    const matchL=!lineFilter||(lineFilter==='unclassified'?hasUnclassifiedItems(o):getOrderLine(o)===lineFilter);
     return matchQ&&matchF&&matchB&&matchL;
   });
   // Precompute branch metadata per order for branch sorting
@@ -2526,6 +2526,12 @@ function getOrderLine(o){
     return [...lines][0]; // 'molded' or 'aerial' (with possible some unclassified items, still primary line)
   }
   return 'mixed';
+}
+
+// Returns true if the order contains at least one item with no product-line classification.
+// Used by the Orders "Unclassified" filter so it matches the dashboard's "N orders have unclassified products" tip.
+function hasUnclassifiedItems(o){
+  return (o.items||[]).some(i=>!getProductLine(i.productNo));
 }
 
 // Split an order's revenue by line. Returns {molded, aerial, unclassified}
