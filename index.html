@@ -1231,21 +1231,29 @@ function getStatus(o){
 }
 function statusBadge(o){
   const s=getStatus(o);
-  // For pending orders with a future ship date, show the scheduled month instead of "Pending"
-  if(s==='pending'){
-    const sd=parseDate(o.scheduledShip);
-    if(sd){
-      // sd is YYYY-MM-DD; pull month index 0-11
+  // Build a month badge if there's a future scheduled ship date — used for pending, partial, and backorder
+  const sd=parseDate(o.scheduledShip);
+  let monthHtml='';
+  if(sd){
+    const today=new Date();today.setHours(0,0,0,0);
+    const shipDate=new Date(sd+'T12:00:00');
+    if(shipDate>=today){
       const monthIdx=parseInt(sd.slice(5,7),10)-1;
       const yearStr=sd.slice(0,4);
-      const today=new Date();
       const showYear=parseInt(yearStr,10)!==today.getFullYear();
-      return monthBadge(monthIdx,showYear?yearStr.slice(2):null);
+      monthHtml=monthBadge(monthIdx,showYear?yearStr.slice(2):null);
     }
   }
+  // Pending + future ship date → month alone (the month implicitly means pending)
+  if(s==='pending'&&monthHtml)return monthHtml;
+  // For partial or backorder with a future ship date, show both: status badge + when the rest ships
   const map={shipped:['b-shipped','Shipped'],partial:['b-partial','Partial'],backorder:['b-backorder','Backorder'],overdue:['b-overdue','Overdue'],pending:['b-pending','Pending']};
   const[cls,label]=map[s]||['b-pending','Pending'];
-  return`<span class="badge ${cls}">${label}</span>`;
+  const statusHtml=`<span class="badge ${cls}">${label}</span>`;
+  if((s==='partial'||s==='backorder')&&monthHtml){
+    return statusHtml+'<span style="display:inline-block;width:4px"></span>'+monthHtml;
+  }
+  return statusHtml;
 }
 
 // Color-coded month badge. monthIdx is 0-11. Optional yearSuffix shows 2-digit year for non-current-year ships.
