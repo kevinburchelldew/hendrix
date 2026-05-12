@@ -1797,18 +1797,32 @@ function showDetail(id){
 function showEditForm(id){
   const o=orders.find(x=>String(x.id)===String(id));if(!o)return;
   const toInput=s=>{const d=parseDate(s);return d||s||'';};
+  const billToOptions=buildLocationOptions('bill-to');
+  const shipToOptions=buildLocationOptions('ship-to');
   document.getElementById('order-detail').innerHTML=`<div class="detail-panel">
     <button class="close-btn" onclick="showDetail('${o.id}')">×</button>
     <div style="font-size:15px;font-weight:600;margin-bottom:14px">Edit Order ${o.salesOrderNo||'—'}</div>
     <div class="detail-grid">
       <div class="df"><label>Sales order #</label><input id="e-sono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.salesOrderNo||''}"></div>
       <div class="df"><label>Customer PO #</label><input id="e-pono" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerPONo||''}"></div>
-      <div class="df"><label>Customer name (bill to)</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customer||''}">
-      <div class="df"><label>Customer city</label><input id="e-city" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.customerCity||''}">
-      <div class="df"><label>Customer state</label><input id="e-state" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.customerState||''}">
-      <div class="df"><label>Ship to name</label><input id="e-shipto" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.shipToName||''}">
-      <div class="df"><label>Ship to city</label><input id="e-shipcity" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.shipToCity||''}">
-      <div class="df"><label>Ship to state</label><input id="e-shipstate" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${o.shipToState||''}"></div>
+      <div class="df" style="grid-column:span 3"><label style="color:#185FA5;font-weight:600">↓ Quick fill: pick an existing bill-to customer to avoid duplicates</label>
+        <select onchange="quickFillBillTo(this.value)" style="width:100%;height:32px;border-radius:6px;border:1px solid #185FA5;padding:0 8px;font-size:13px;background:#F4F8FC;color:#185FA5">
+          <option value="">— Select existing customer to autofill the fields below —</option>
+          ${billToOptions}
+        </select>
+      </div>
+      <div class="df"><label>Customer name (bill to)</label><input id="e-cust" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${(o.customer||'').replace(/"/g,'&quot;')}"></div>
+      <div class="df"><label>Customer city</label><input id="e-city" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${(o.customerCity||'').replace(/"/g,'&quot;')}"></div>
+      <div class="df"><label>Customer state</label><input id="e-state" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${(o.customerState||'').replace(/"/g,'&quot;')}"></div>
+      <div class="df" style="grid-column:span 3"><label style="color:#185FA5;font-weight:600">↓ Quick fill: pick an existing ship-to location</label>
+        <select onchange="quickFillShipTo(this.value)" style="width:100%;height:32px;border-radius:6px;border:1px solid #185FA5;padding:0 8px;font-size:13px;background:#F4F8FC;color:#185FA5">
+          <option value="">— Select existing ship-to to autofill the fields below —</option>
+          ${shipToOptions}
+        </select>
+      </div>
+      <div class="df"><label>Ship to name</label><input id="e-shipto" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${(o.shipToName||'').replace(/"/g,'&quot;')}"></div>
+      <div class="df"><label>Ship to city</label><input id="e-shipcity" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${(o.shipToCity||'').replace(/"/g,'&quot;')}"></div>
+      <div class="df"><label>Ship to state</label><input id="e-shipstate" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px;text-transform:uppercase" value="${(o.shipToState||'').replace(/"/g,'&quot;')}"></div>
       <div class="df"><label>Scheduled ship (MM/DD/YYYY)</label><input id="e-ship" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.scheduledShip)}"></div>
       <div class="df"><label>Order date (MM/DD/YYYY)</label><input id="e-date" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${toInput(o.orderDate)}"></div>
       <div class="df"><label>Order total ($)</label><input id="e-total" type="number" step="0.01" style="width:100%;height:30px;border-radius:6px;border:1px solid #d0d0d0;padding:0 8px;font-size:13px" value="${o.orderTotal||0}"></div>
@@ -1826,6 +1840,72 @@ function showEditForm(id){
       <button onclick="showDetail('${o.id}')" style="padding:8px 20px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:13px">Cancel</button>
     </div>
   </div>`;
+}
+
+// Build option list of distinct {name, city, state} combos from existing orders.
+// kind='bill-to' reads customer/customerCity/customerState; kind='ship-to' reads shipToName/shipToCity/shipToState.
+// Falls back to bill-to fields for ship-to options when shipTo isn't present (treats them as the same address).
+function buildLocationOptions(kind){
+  const groups={};
+  orders.forEach(o=>{
+    let name,city,state;
+    if(kind==='bill-to'){
+      name=o.customer;city=o.customerCity;state=o.customerState;
+    }else{
+      name=o.shipToName||o.customer;
+      city=o.shipToCity||o.customerCity;
+      state=o.shipToState||o.customerState;
+    }
+    if(!name)return;
+    // Use canonical name to dedupe alias variants, but show the most common raw spelling
+    const canonical=getCanonicalCustomer(name,city,state)||name;
+    const key=canonical.trim().toUpperCase()+'|'+normalizeCity(city)+'|'+normalizeState(state);
+    if(!groups[key]){
+      groups[key]={name:canonical,city:city||'',state:state||'',count:0,spellings:{}};
+    }
+    groups[key].count++;
+    groups[key].spellings[name]=(groups[key].spellings[name]||0)+1;
+  });
+  // Pick the most-common raw spelling as the display value for each group
+  const list=Object.values(groups).map(g=>{
+    const topSpelling=Object.entries(g.spellings).sort((a,b)=>b[1]-a[1])[0][0];
+    return {name:topSpelling,city:g.city,state:g.state,count:g.count};
+  });
+  // Sort alphabetically by name, then state, then city
+  list.sort((a,b)=>{
+    const an=(a.name||'').toUpperCase(),bn=(b.name||'').toUpperCase();
+    if(an!==bn)return an<bn?-1:1;
+    const as=(a.state||'').toUpperCase(),bs=(b.state||'').toUpperCase();
+    if(as!==bs)return as<bs?-1:1;
+    return (a.city||'').localeCompare(b.city||'');
+  });
+  return list.map(g=>{
+    // Encode payload as JSON in the option value so we can parse cleanly on selection
+    const payload=encodeURIComponent(JSON.stringify({name:g.name,city:g.city,state:g.state}));
+    const loc=[g.city,g.state].filter(Boolean).join(', ');
+    const label=g.name+(loc?' — '+loc:'')+' ('+g.count+' order'+(g.count!==1?'s':'')+')';
+    return `<option value="${payload}">${label.replace(/</g,'&lt;')}</option>`;
+  }).join('');
+}
+
+function quickFillBillTo(payload){
+  if(!payload)return;
+  try{
+    const data=JSON.parse(decodeURIComponent(payload));
+    const c=document.getElementById('e-cust');if(c)c.value=data.name||'';
+    const ci=document.getElementById('e-city');if(ci)ci.value=data.city||'';
+    const st=document.getElementById('e-state');if(st)st.value=(data.state||'').toUpperCase();
+  }catch(e){console.error('quickFillBillTo failed:',e);}
+}
+
+function quickFillShipTo(payload){
+  if(!payload)return;
+  try{
+    const data=JSON.parse(decodeURIComponent(payload));
+    const c=document.getElementById('e-shipto');if(c)c.value=data.name||'';
+    const ci=document.getElementById('e-shipcity');if(ci)ci.value=data.city||'';
+    const st=document.getElementById('e-shipstate');if(st)st.value=(data.state||'').toUpperCase();
+  }catch(e){console.error('quickFillShipTo failed:',e);}
 }
 
 function saveEdit(id){
