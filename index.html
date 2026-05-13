@@ -1101,9 +1101,27 @@ async function applyInvoiceToOrder(inv, idx, status){
       return;
     }
   }
+  // Match invoice items to order items by productNo FIRST (unambiguous identifier).
+  // Fall back to lineNo only if productNo doesn't match — Marmon invoices restart
+  // their own line numbering at 001 for each invoice, so the invoice's lineNo
+  // does NOT correspond to the original SO line number. Matching by lineNo first
+  // would incorrectly apply shipments to whichever SO line happens to share the
+  // restarted number (usually line 001), regardless of which product actually shipped.
+  const usedOrderIdx=new Set();
   (inv.items||[]).forEach(ii=>{
-    const oi=order.items?.find(x=>x.lineNo===ii.lineNo||x.productNo===ii.productNo);
-    if(oi){
+    let oiIdx=-1;
+    // Prefer productNo match (unambiguous, and skip already-matched lines so the
+    // same product appearing on multiple SO lines is handled in order).
+    if(ii.productNo && order.items){
+      oiIdx=order.items.findIndex((x,i)=>!usedOrderIdx.has(i)&&x.productNo===ii.productNo);
+    }
+    // Fall back to lineNo only if no productNo match found
+    if(oiIdx<0 && ii.lineNo && order.items){
+      oiIdx=order.items.findIndex((x,i)=>!usedOrderIdx.has(i)&&x.lineNo===ii.lineNo);
+    }
+    if(oiIdx>=0){
+      usedOrderIdx.add(oiIdx);
+      const oi=order.items[oiIdx];
       oi.qtyShipped=(oi.qtyShipped||0)+(ii.qtyShipped||0);
       // Calculate balance from ordered qty minus shipped qty
       // (don't rely on invoice's balance field since it may be blank on partial shipments)
