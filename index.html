@@ -735,7 +735,7 @@ async function handleFile(input){
   const files=Array.isArray(input)?input:Array.from(input.files||[]);
   if(!files.length)return;
   const status=document.getElementById('upload-status');
-  const results={success:[],failed:[]};
+  const results={success:[],failed:[],skipped:[]};
   
   for(let i=0;i<files.length;i++){
     const file=files[i];
@@ -753,8 +753,12 @@ async function handleFile(input){
       else{await handleInvoicePDF(text,file.name,status,true);}
       results.success.push(file.name);
     }catch(e){
-      console.error('Failed to import '+file.name,e);
-      results.failed.push({name:file.name,error:e.message,rawResponse:e.rawResponse||null,uploadType});
+      if(e.isDuplicate){
+        results.skipped.push({name:file.name,reason:e.message,matchedOrderId:e.matchedOrderId,matchedOrderSO:e.matchedOrderSO});
+      }else{
+        console.error('Failed to import '+file.name,e);
+        results.failed.push({name:file.name,error:e.message,rawResponse:e.rawResponse||null,uploadType});
+      }
     }
   }
   
@@ -762,6 +766,18 @@ async function handleFile(input){
   let summaryHtml='';
   if(results.success.length>0){
     summaryHtml+=`<div class="msg-ok">✓ Successfully imported ${results.success.length} file${results.success.length!==1?'s':''}</div>`;
+  }
+  if(results.skipped.length>0){
+    summaryHtml+=`<div class="msg-warn" style="margin-top:8px">⊘ Skipped ${results.skipped.length} duplicate${results.skipped.length!==1?'s':''} — already in the system:</div>`;
+    results.skipped.forEach(s=>{
+      summaryHtml+=`<div style="background:#FFF8E1;border:1px solid #FFE0B2;border-radius:8px;padding:10px 12px;margin-top:6px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <strong style="color:#E65100">${s.name.replace(/</g,'&lt;')}</strong>
+          <span style="color:#666;flex:1">${s.reason.replace(/</g,'&lt;')}</span>
+          ${s.matchedOrderId?`<button onclick="jumpToOrder('${s.matchedOrderId}')" style="padding:4px 10px;border-radius:6px;border:1px solid #185FA5;background:#fff;color:#185FA5;cursor:pointer;font-size:11px;font-weight:500">View existing order →</button>`:''}
+        </div>
+      </div>`;
+    });
   }
   if(results.failed.length>0){
     summaryHtml+=`<div class="msg-err" style="margin-top:8px">✗ Failed ${results.failed.length} file${results.failed.length!==1?'s':''}. Click any to see details:</div>`;
@@ -949,11 +965,53 @@ ${cleanText.slice(0,6000)}`);
   });
   // Coerce all numeric fields to real numbers (AI sometimes returns "$1,234.56" strings)
   normalizeOrderNumbers([order]);
-  const exists=orders.findIndex(o=>o.salesOrderNo===order.salesOrderNo);
-  if(exists>=0){orders[exists]=order;if(!isBulk)status.innerHTML=`<div class="msg-warn">⚠ SO ${order.salesOrderNo} already existed — updated with this version.</div>`;}
-  else{orders.unshift(order);if(!isBulk)status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>`;}
+  // Duplicate detection — multiple strategies in priority order
+  const dup=findExistingOrderMatch(order);
+  if(dup.match){
+    // Throw a typed error so the bulk handler can bucket it as "skipped" rather than "failed"
+    const err=new Error('Duplicate of an order already in the system. '+dup.reason);
+    err.isDuplicate=true;
+    err.matchedOrderId=dup.match.id;
+    err.matchedOrderSO=dup.match.salesOrderNo;
+    throw err;
+  }
+  orders.unshift(order);
+  if(!isBulk)status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>`;
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();renderDashboard();renderOrders();
+}
+
+// Detect whether an incoming order matches an existing one. Returns {match, reason} or {match:null}.
+// Match strategies in priority order — first match wins. All comparisons are normalized
+// (trimmed, uppercased) to defeat whitespace, case, and AI extraction inconsistencies.
+function findExistingOrderMatch(incoming){
+  const norm=s=>String(s||'').trim().toUpperCase().replace(/\s+/g,' ');
+  const so=norm(incoming.salesOrderNo);
+  const po=norm(incoming.customerPONo);
+  const cust=norm(incoming.customer);
+  const total=num(incoming.orderTotal);
+  const date=parseDate(incoming.orderDate)||'';
+  // 1. Strong match by SO# alone (the most reliable identifier when present)
+  if(so){
+    const m=orders.find(o=>norm(o.salesOrderNo)===so);
+    if(m)return {match:m,reason:'Sales Order # '+so+' is already imported.'};
+  }
+  // 2. Strong match by customer + PO# (handles cases where AI didn't extract SO#)
+  if(po&&cust){
+    const m=orders.find(o=>norm(o.customerPONo)===po&&norm(o.customer)===cust);
+    if(m)return {match:m,reason:'Customer PO # '+po+' from '+(incoming.customer||cust)+' is already imported (SO# '+(m.salesOrderNo||'?')+').'};
+  }
+  // 3. Same filename — strong signal someone re-uploaded the same PDF
+  if(incoming.filename){
+    const m=orders.find(o=>o.filename===incoming.filename);
+    if(m)return {match:m,reason:'Filename "'+incoming.filename+'" was already imported (SO# '+(m.salesOrderNo||'?')+').'};
+  }
+  // 4. Suspicious composite match: same customer + order date + order total (no SO#, no PO# either)
+  if(cust&&date&&total>0){
+    const m=orders.find(o=>norm(o.customer)===cust&&parseDate(o.orderDate)===date&&Math.abs(num(o.orderTotal)-total)<1);
+    if(m)return {match:m,reason:'Same customer ('+(incoming.customer||cust)+'), same order date ('+fmtDate(date)+'), same order total ('+fmt(total)+') as SO# '+(m.salesOrderNo||'?')+'.'};
+  }
+  return {match:null};
 }
 
 function applyInvoiceManual(){
@@ -1307,6 +1365,16 @@ function setTrendMonths(m){
     else{b.style.background='#fff';b.style.color='#666';}
   });
   renderDashboard();
+}
+
+// Jump to a specific order's detail view from anywhere in the app
+function jumpToOrder(orderId){
+  switchTab('orders');
+  setTimeout(()=>{
+    showDetail(orderId);
+    const detail=document.getElementById('order-detail');
+    if(detail&&detail.scrollIntoView)detail.scrollIntoView({behavior:'smooth',block:'start'});
+  },50);
 }
 
 // Jump from anywhere in the app straight to an order's edit form on the Orders tab.
