@@ -479,6 +479,7 @@ async function loadFromOneDrive(){
     await loadAliasesFromOneDrive();
     await loadNotDuplicatesFromOneDrive();
     await loadProductLinesFromOneDrive();
+    await loadCommissionRatesFromOneDrive();
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
     else{
@@ -569,6 +570,7 @@ async function doSave(kind){
     aliases:{path:'/me/drive/root:/Sales Tracker/customer-aliases.json:/content',data:()=>customerAliases},
     notDuplicates:{path:'/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content',data:()=>customerNotDuplicates},
     productLines:{path:'/me/drive/root:/Sales Tracker/product-lines.json:/content',data:()=>productLines},
+    commissionRates:{path:'/me/drive/root:/Sales Tracker/commission-rates.json:/content',data:()=>commissionRates},
   };
   const cfg=map[kind];
   if(!cfg)return;
@@ -651,6 +653,20 @@ async function loadProductLinesFromOneDrive(){
     }
   }catch(e){
     if(!e.message.includes('itemNotFound'))console.error('Failed to load product lines from OneDrive:',e);
+  }
+}
+
+async function saveCommissionRatesToOneDrive(){return queueSave('commissionRates');}
+
+async function loadCommissionRatesFromOneDrive(){
+  try{
+    const data=await graphFetch('/me/drive/root:/Sales Tracker/commission-rates.json:/content');
+    if(data&&typeof data==='object'){
+      commissionRates=data;
+      localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+    }
+  }catch(e){
+    if(!e.message.includes('itemNotFound'))console.error('Failed to load commission rates from OneDrive:',e);
   }
 }
 
@@ -2179,6 +2195,7 @@ function addCommissionRate(){
   if(!rateRaw&&!line){alert('Enter at least a rate or a line classification.');return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
   localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
+  saveCommissionRatesToOneDrive();
   saveProductLinesToOneDrive();
   document.getElementById('cr-product').value='';
   document.getElementById('cr-rate').value='';
@@ -2191,6 +2208,7 @@ function addCommissionRate(){
 function deleteCommissionRate(product){
   delete commissionRates[product];
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  saveCommissionRatesToOneDrive();
   renderCommissionRates();
 }
 
@@ -2295,6 +2313,7 @@ function setRateInline(product,val){
   else if(rate>=0&&rate<=100){commissionRates[product]=rate;}
   else{alert('Rate must be between 0 and 100');renderCommissionRates();return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
+  saveCommissionRatesToOneDrive();
   // Update all existing orders with this product's new rate
   orders.forEach(o=>{
     (o.items||[]).forEach(i=>{
