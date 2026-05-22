@@ -479,7 +479,6 @@ async function loadFromOneDrive(){
     await loadAliasesFromOneDrive();
     await loadNotDuplicatesFromOneDrive();
     await loadProductLinesFromOneDrive();
-    await loadCommissionRatesFromOneDrive();
   }catch(e){
     if(e.message.includes('itemNotFound')){setSyncStatus('Connected — ready to import first order','ok');}
     else{
@@ -570,7 +569,6 @@ async function doSave(kind){
     aliases:{path:'/me/drive/root:/Sales Tracker/customer-aliases.json:/content',data:()=>customerAliases},
     notDuplicates:{path:'/me/drive/root:/Sales Tracker/customer-not-duplicates.json:/content',data:()=>customerNotDuplicates},
     productLines:{path:'/me/drive/root:/Sales Tracker/product-lines.json:/content',data:()=>productLines},
-    commissionRates:{path:'/me/drive/root:/Sales Tracker/commission-rates.json:/content',data:()=>commissionRates},
   };
   const cfg=map[kind];
   if(!cfg)return;
@@ -653,20 +651,6 @@ async function loadProductLinesFromOneDrive(){
     }
   }catch(e){
     if(!e.message.includes('itemNotFound'))console.error('Failed to load product lines from OneDrive:',e);
-  }
-}
-
-async function saveCommissionRatesToOneDrive(){return queueSave('commissionRates');}
-
-async function loadCommissionRatesFromOneDrive(){
-  try{
-    const data=await graphFetch('/me/drive/root:/Sales Tracker/commission-rates.json:/content');
-    if(data&&typeof data==='object'){
-      commissionRates=data;
-      localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
-    }
-  }catch(e){
-    if(!e.message.includes('itemNotFound'))console.error('Failed to load commission rates from OneDrive:',e);
   }
 }
 
@@ -874,10 +858,34 @@ function safeJsonParse(raw){
 }
 
 async function handleOrderPDF(text,filename,status,isBulk){
-  // Regex-based extraction for key fields — much more reliable than AI
-  const fnMatch = filename.match(/(\d{5,7})/);
+  // Regex-based extraction for key fields — much more reliable than AI.
+  // PRIORITY: document text > filename. The PDF is ground truth; the filename
+  // may have been renamed, contain release/PO digits, or be a duplicate name.
+  // Also validate that whatever we pick literally appears in the document — this
+  // catches hallucinations and filename-vs-content mismatches.
   const soMatch = text.match(/SALES\s+ORDER\s+NO[.:\s]*(\d{5,7})/i);
-  const extractedSO = fnMatch ? fnMatch[1] : (soMatch ? soMatch[1] : '');
+  const fnMatch = filename.match(/(\d{5,7})/);
+  const textSO = soMatch ? soMatch[1] : '';
+  const fileSO = fnMatch ? fnMatch[1] : '';
+  let extractedSO = '';
+  let soWarning = '';
+  if(textSO){
+    extractedSO = textSO;
+    if(fileSO && fileSO !== textSO){
+      soWarning = `Filename SO# (${fileSO}) differs from document SO# (${textSO}) — using document.`;
+      console.warn('[handleOrderPDF]', soWarning);
+    }
+  } else if(fileSO){
+    // Document didn't yield an SO# under the label — fall back to filename, but
+    // ONLY if that number actually appears somewhere in the document text.
+    const inDoc = new RegExp(`\\b${fileSO}\\b`).test(text);
+    if(inDoc){
+      extractedSO = fileSO;
+    } else {
+      soWarning = `Filename SO# (${fileSO}) not found in document text — discarding to avoid mis-match.`;
+      console.warn('[handleOrderPDF]', soWarning);
+    }
+  }
   
   // Customer PO # and date — look for the pattern "XXXXXX-XX MM/DD/YYYY" or "XXXXXXXRLS MM/DD/YYYY"
   // The PO# comes right before the first date in the document header
@@ -962,12 +970,25 @@ ${cleanText.slice(0,6000)}`);
   const aiPO=validatePO(parsed.customerPONo);
   const regexPO=validatePO(extractedPO);
   const finalPO=aiPO||regexPO||'';
+  // If regex didn't get an SO#, accept the AI's value ONLY if it actually appears
+  // in the document text. An AI-returned number that's not in the PDF is a
+  // hallucination (often a remembered SO# from another order in the session).
+  let finalSO = extractedSO;
+  if(!finalSO && parsed.salesOrderNo){
+    const aiSO = String(parsed.salesOrderNo).trim();
+    if(/^\d{5,7}$/.test(aiSO) && new RegExp(`\\b${aiSO}\\b`).test(text)){
+      finalSO = aiSO;
+    } else if(aiSO){
+      soWarning = (soWarning?soWarning+' ':'') + `AI returned SO# "${aiSO}" but it doesn't appear in the document — discarded as likely hallucination.`;
+      console.warn('[handleOrderPDF]', soWarning);
+    }
+  }
   // Merge regex-extracted fields (always more reliable) with AI-parsed fields
   const order={
     ...parsed,
     id: Date.now(),
     filename: filename,
-    salesOrderNo: extractedSO || parsed.salesOrderNo || '',
+    salesOrderNo: finalSO,
     customerPONo: finalPO,
     orderDate: extractedOrderDate || parsed.orderDate || '',
     orderTotal: extractedTotal || parsed.orderTotal || 0,
@@ -994,7 +1015,10 @@ ${cleanText.slice(0,6000)}`);
   }
   orders.unshift(order);
   invalidateCanonicalCache();
-  if(!isBulk)status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>`;
+  if(!isBulk){
+    const warnHtml = soWarning ? `<div class="msg-warn" style="margin-top:6px">⚠ ${soWarning}</div>` : '';
+    status.innerHTML=`<div class="msg-ok">✓ Order ${order.salesOrderNo} imported — ${order.customer} — ${fmtDate(order.scheduledShip)}</div>${warnHtml}`;
+  }
   localStorage.setItem('dewart_orders',JSON.stringify(orders));
   await saveToOneDrive();renderDashboard();renderOrders();
 }
@@ -1014,8 +1038,12 @@ function findExistingOrderMatch(incoming){
     const m=orders.find(o=>norm(o.salesOrderNo)===so);
     if(m)return {match:m,reason:'Sales Order # '+so+' is already imported.'};
   }
-  // 2. Strong match by customer + PO# (handles cases where AI didn't extract SO#)
-  if(po&&cust){
+  // 2. Customer + PO# match — only fires when incoming SO# is missing.
+  //    When the incoming SO# IS present and differs from the existing one,
+  //    that's two distinct orders that legitimately share a PO# (blanket PO
+  //    with multiple releases is common in utility distribution). Auto-rejecting
+  //    on customer+PO alone would block valid new orders.
+  if(!so && po && cust){
     const m=orders.find(o=>norm(o.customerPONo)===po&&norm(o.customer)===cust);
     if(m)return {match:m,reason:'Customer PO # '+po+' from '+(incoming.customer||cust)+' is already imported (SO# '+(m.salesOrderNo||'?')+').'};
   }
@@ -2195,7 +2223,6 @@ function addCommissionRate(){
   if(!rateRaw&&!line){alert('Enter at least a rate or a line classification.');return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
   localStorage.setItem('dewart_product_lines',JSON.stringify(productLines));
-  saveCommissionRatesToOneDrive();
   saveProductLinesToOneDrive();
   document.getElementById('cr-product').value='';
   document.getElementById('cr-rate').value='';
@@ -2208,7 +2235,6 @@ function addCommissionRate(){
 function deleteCommissionRate(product){
   delete commissionRates[product];
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
-  saveCommissionRatesToOneDrive();
   renderCommissionRates();
 }
 
@@ -2313,7 +2339,6 @@ function setRateInline(product,val){
   else if(rate>=0&&rate<=100){commissionRates[product]=rate;}
   else{alert('Rate must be between 0 and 100');renderCommissionRates();return;}
   localStorage.setItem('dewart_commission_rates',JSON.stringify(commissionRates));
-  saveCommissionRatesToOneDrive();
   // Update all existing orders with this product's new rate
   orders.forEach(o=>{
     (o.items||[]).forEach(i=>{
