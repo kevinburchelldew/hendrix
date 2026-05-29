@@ -847,6 +847,12 @@ function safeJsonParse(raw){
     fixed=fixed.replace(/,(\s*[}\]])/g,'$1');
     // Some models emit `"value",}` — already handled above. Also handle Python-style None/True/False just in case.
     fixed=fixed.replace(/\bNone\b/g,'null').replace(/\bTrue\b/g,'true').replace(/\bFalse\b/g,'false');
+    // Repair invalid backslash escapes. JSON only allows: \" \\ \/ \b \f \n \r \t \uXXXX
+    // The AI sometimes over-escapes apostrophes (\' for "D'Ewart Representatives") or other
+    // characters that don't need escaping. Strip the backslash before any non-valid escape char.
+    // We protect \uXXXX by requiring the four hex digits, otherwise treat \u as invalid too.
+    fixed=fixed.replace(/\\u(?![0-9a-fA-F]{4})/g,'u');
+    fixed=fixed.replace(/\\([^"\\\/bfnrtu])/g,'$1');
     try { return JSON.parse(fixed); } catch(e2){
       // Throw a debuggable error: original error + truncated raw text
       const preview=raw.length>500?raw.slice(0,500)+'…':raw;
@@ -929,7 +935,7 @@ async function handleOrderPDF(text,filename,status,isBulk){
   const tcIdx = text.search(/TERMS\s*&\s*CONDITIONS\s+OF\s+SALE/i);
   if(tcIdx > 0) cleanText = text.slice(0, tcIdx);
 
-  const raw=await callAI(`Parse this Marmon Utility order acknowledgement. Return ONLY strict valid JSON — no markdown, no comments, no trailing commas. Every property name MUST be wrapped in double quotes. Every string value MUST be wrapped in double quotes. Pay close attention to extracting EVERY line item — there may be multiple (001, 002, 003, etc.). If a value contains a double quote, escape it as \\".
+  const raw=await callAI(`Parse this Marmon Utility order acknowledgement. Return ONLY strict valid JSON — no markdown, no comments, no trailing commas. Every property name MUST be wrapped in double quotes. Every string value MUST be wrapped in double quotes. Pay close attention to extracting EVERY line item — there may be multiple (001, 002, 003, etc.). If a value contains a double quote, escape it as \\". Apostrophes (single quotes) are normal characters in JSON strings — do NOT escape them. For example, write "D'Ewart Representatives" literally, never "D\\'Ewart Representatives".
 
 Required JSON shape:
 {
